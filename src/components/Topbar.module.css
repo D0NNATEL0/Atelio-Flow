@@ -21,9 +21,11 @@
 }
 
 .title {
+  font-family: var(--brand-font);
   font-size: 1.12rem;
-  font-weight: 800;
-  letter-spacing: -0.02em;
+  font-weight: 500;
+  letter-spacing: -0.045em;
+  color: #3a3632;
 }
 
 .menuButton,

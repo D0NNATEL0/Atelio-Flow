@@ -12,11 +12,15 @@ const titles: Record<string, string> = {
   "/documents": "Documents",
   "/clients": "Clients",
   "/editor": "Éditeur",
+  "/compte": "Mon compte",
+  "/abonnement": "Abonnement",
   "/app": "Dashboard",
   "/app/tableau-de-bord": "Dashboard",
   "/app/devis": "Documents",
   "/app/factures": "Documents",
   "/app/clients": "Clients",
+  "/app/compte": "Mon compte",
+  "/app/abonnement": "Abonnement",
   "/app/devis/nouveau": "Éditeur",
   "/app/factures/nouvelle": "Éditeur"
 };
@@ -30,7 +34,7 @@ export function Topbar({ onMenuToggle }: TopbarProps) {
         <button className={styles.menuButton} onClick={onMenuToggle} type="button">
           ☰
         </button>
-        <strong className={styles.title}>{titles[pathname] ?? "Atelio"}</strong>
+        <strong className={styles.title}>{titles[pathname] ?? "Atelio Flow"}</strong>
       </div>
 
       <div className={styles.right}>

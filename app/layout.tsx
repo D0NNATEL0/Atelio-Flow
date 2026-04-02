@@ -2,8 +2,8 @@ import "./globals.css";
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
-  title: "Atelio",
-  description: "Atelio aide les professionnels à créer des devis, factures et relances."
+  title: "Atelio Flow",
+  description: "Atelio Flow, l’outil simple pour tes documents pro."
 };
 
 export default function RootLayout({

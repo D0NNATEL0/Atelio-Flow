@@ -1,9 +1,16 @@
 "use client";
 
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { canCreateDocument, canUseLockedDocumentTypes, defaultAccount, loadAccount, type StoredAccount } from "@/lib/account-store";
+import { downloadDocumentAsPdf, downloadDocumentsAsZip } from "@/lib/pdf-export";
 import {
+  clearPendingExternalDocument,
+  createDocumentEntry,
   defaultDocuments,
+  guessDocumentTypeFromFileName,
+  loadClients,
   loadDocuments,
+  savePendingExternalDocument,
   saveDocuments,
   type StoredDocument
 } from "@/lib/workspace-store";
@@ -14,6 +21,45 @@ const typeFilters = ["Tous", "Facture", "Devis", "Contrat", "Avenant"] as const;
 const statuses = ["Payée", "En attente", "En retard", "Brouillon", "Signé"] as const;
 
 type DocumentRow = StoredDocument;
+type BulkAction = "" | "download" | "delete";
+
+function parseDocumentDate(value: string) {
+  const direct = Date.parse(value);
+  if (!Number.isNaN(direct)) return direct;
+
+  const normalized = value
+    .toLowerCase()
+    .replace(/\./g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  const match = normalized.match(/^(\d{1,2}) ([a-zéû]+) (\d{4})$/);
+  if (!match) return 0;
+
+  const monthMap: Record<string, string> = {
+    janvier: "01",
+    fevrier: "02",
+    février: "02",
+    mars: "03",
+    avril: "04",
+    avr: "04",
+    mai: "05",
+    juin: "06",
+    juillet: "07",
+    aout: "08",
+    août: "08",
+    septembre: "09",
+    octobre: "10",
+    novembre: "11",
+    decembre: "12",
+    décembre: "12"
+  };
+
+  const [, day, monthLabel, year] = match;
+  const month = monthMap[monthLabel];
+  if (!month) return 0;
+
+  return Date.parse(`${year}-${month}-${day.padStart(2, "0")}`);
+}
 
 function getStatusClass(status: string) {
   if (status === "Payée") return "status-success";
@@ -30,6 +76,10 @@ function getTypeClass(type: string) {
   return "status-muted";
 }
 
+function isLockedType(type: (typeof typeFilters)[number], account: StoredAccount) {
+  return (type === "Contrat" || type === "Avenant") && !canUseLockedDocumentTypes(account);
+}
+
 function parseAmount(value: string) {
   return Number(value.replace(/[^\d,]/g, "").replace(",", ".")) || 0;
 }
@@ -41,275 +91,24 @@ function createDuplicateId(id: string) {
   return parts.join("-");
 }
 
-function handleDownloadDocument(row: DocumentRow) {
-  const printWindow = window.open("", "_blank", "noopener,noreferrer,width=960,height=1200");
-  if (!printWindow) return;
-
-  const isContractFamily = row.type === "Contrat" || row.type === "Avenant";
-  const title = `${row.type} ${row.id}`;
-
-  printWindow.document.write(`
-    <!doctype html>
-    <html lang="fr">
-      <head>
-        <meta charset="utf-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <title>${title}</title>
-        <style>
-          body {
-            margin: 0;
-            padding: 32px;
-            font-family: Arial, sans-serif;
-            background: #f7f2ea;
-            color: #241f1a;
-          }
-          .page {
-            max-width: 820px;
-            margin: 0 auto;
-            background: #ffffff;
-            border-radius: 24px;
-            padding: 40px;
-            box-shadow: 0 18px 60px rgba(0,0,0,0.08);
-          }
-          .head {
-            display: flex;
-            justify-content: space-between;
-            gap: 24px;
-            align-items: flex-start;
-            margin-bottom: 28px;
-          }
-          .brand {
-            font-size: 28px;
-            font-weight: 800;
-            color: #e48b2f;
-            margin-bottom: 10px;
-          }
-          .muted {
-            color: #6f665c;
-            line-height: 1.55;
-          }
-          .badge {
-            display: inline-flex;
-            padding: 10px 16px;
-            border-radius: 999px;
-            background: #fff2e6;
-            color: #d97613;
-            font-weight: 700;
-          }
-          .meta {
-            display: grid;
-            grid-template-columns: repeat(3, minmax(0, 1fr));
-            gap: 0;
-            overflow: hidden;
-            border: 1px solid #eee3d8;
-            border-radius: 18px;
-            margin-bottom: 28px;
-          }
-          .meta > div {
-            padding: 18px;
-            border-right: 1px solid #eee3d8;
-          }
-          .meta > div:last-child {
-            border-right: none;
-          }
-          .label {
-            display: block;
-            font-size: 12px;
-            font-weight: 700;
-            text-transform: uppercase;
-            letter-spacing: .08em;
-            color: #85796f;
-            margin-bottom: 6px;
-          }
-          .value {
-            font-size: 16px;
-            font-weight: 700;
-          }
-          .parties {
-            display: grid;
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 24px;
-            margin-bottom: 28px;
-          }
-          .sectionTitle {
-            font-size: 12px;
-            font-weight: 700;
-            text-transform: uppercase;
-            letter-spacing: .08em;
-            color: #85796f;
-            margin-bottom: 8px;
-          }
-          .partyName {
-            font-size: 24px;
-            font-weight: 800;
-            margin-bottom: 8px;
-          }
-          .table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-bottom: 28px;
-          }
-          .table th {
-            text-align: left;
-            padding: 14px 18px;
-            background: #e48b2f;
-            color: white;
-            font-size: 14px;
-          }
-          .table td {
-            padding: 16px 18px;
-            border-bottom: 1px solid #eee3d8;
-          }
-          .totals {
-            width: 320px;
-            margin-left: auto;
-            display: grid;
-            gap: 8px;
-          }
-          .totalsRow {
-            display: flex;
-            justify-content: space-between;
-            gap: 16px;
-          }
-          .totalFinal {
-            display: flex;
-            justify-content: space-between;
-            gap: 16px;
-            padding: 14px 18px;
-            border-radius: 16px;
-            background: #e48b2f;
-            color: white;
-            font-weight: 800;
-          }
-          .contractBlock {
-            display: grid;
-            gap: 20px;
-          }
-          .contractCard {
-            padding: 18px 20px;
-            border: 1px solid #eee3d8;
-            border-radius: 18px;
-            background: #fffdfa;
-          }
-          .footer {
-            margin-top: 28px;
-            padding-top: 18px;
-            border-top: 1px solid #eee3d8;
-            color: #85796f;
-          }
-          @media print {
-            body {
-              background: white;
-              padding: 0;
-            }
-            .page {
-              box-shadow: none;
-              border-radius: 0;
-            }
-          }
-        </style>
-      </head>
-      <body>
-        <main class="page">
-          <div class="head">
-            <div>
-              <div class="brand">Atelio Studio</div>
-              <div class="muted">123 rue de la Paix<br />75001 Paris · SIRET 123 456 789 00012</div>
-            </div>
-            <div>
-              <div class="badge">${row.type}</div>
-              <div class="muted" style="margin-top:12px">${row.id}</div>
-            </div>
-          </div>
-
-          <div class="meta">
-            <div>
-              <span class="label">Date</span>
-              <span class="value">${row.date}</span>
-            </div>
-            <div>
-              <span class="label">${isContractFamily ? "Date de fin" : "Échéance"}</span>
-              <span class="value">${row.due}</span>
-            </div>
-            <div>
-              <span class="label">Statut</span>
-              <span class="value">${row.status}</span>
-            </div>
-          </div>
-
-          <div class="parties">
-            <div>
-              <div class="sectionTitle">Émetteur</div>
-              <div class="partyName">Atelio Studio</div>
-              <div class="muted">123 rue de la Paix<br />75001 Paris<br />contact@atelio.fr</div>
-            </div>
-            <div>
-              <div class="sectionTitle">Client</div>
-              <div class="partyName">${row.client}</div>
-            </div>
-          </div>
-
-          ${
-            isContractFamily
-              ? `
-                <div class="contractBlock">
-                  <div class="contractCard">
-                    <div class="sectionTitle">Objet</div>
-                    <div class="muted">Document contractuel lié à la collaboration en cours avec ${row.client}.</div>
-                  </div>
-                  <div class="contractCard">
-                    <div class="sectionTitle">Cadre</div>
-                    <div class="muted">Les modalités commerciales, livrables et échéances sont confirmés selon le document ${row.id}.</div>
-                  </div>
-                </div>
-              `
-              : `
-                <table class="table">
-                  <thead>
-                    <tr>
-                      <th>Description</th>
-                      <th>Qté</th>
-                      <th>P.U. HT</th>
-                      <th>Total HT</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr>
-                      <td>Prestation principale</td>
-                      <td>1</td>
-                      <td>${row.amount}</td>
-                      <td>${row.amount}</td>
-                    </tr>
-                  </tbody>
-                </table>
-                <div class="totals">
-                  <div class="totalsRow"><span>Sous-total HT</span><strong>${row.amount}</strong></div>
-                  <div class="totalsRow"><span>TVA</span><strong>Incluse selon configuration</strong></div>
-                  <div class="totalFinal"><span>Total TTC</span><span>${row.amount}</span></div>
-                </div>
-              `
-          }
-
-          <div class="footer">Document regénéré depuis l’espace Documents Atelio.</div>
-        </main>
-        <script>
-          window.onload = () => {
-            window.print();
-          };
-        </script>
-      </body>
-    </html>
-  `);
-  printWindow.document.close();
-}
-
 export default function DocumentsPage() {
+  const [account, setAccount] = useState<StoredAccount>(defaultAccount());
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<(typeof filters)[number]>("Tous");
   const [typeFilter, setTypeFilter] = useState<(typeof typeFilters)[number]>("Tous");
+  const [dateSort, setDateSort] = useState<"desc" | "asc">("desc");
   const [rows, setRows] = useState<DocumentRow[]>(defaultDocuments());
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [displayedId, setDisplayedId] = useState<string | null>(null);
+  const [selectedDocuments, setSelectedDocuments] = useState<string[]>([]);
+  const [bulkAction, setBulkAction] = useState<BulkAction>("");
+  const [upgradeModal, setUpgradeModal] = useState<{ title: string; text: string } | null>(null);
+  const [isCreateChoiceOpen, setIsCreateChoiceOpen] = useState(false);
+  const [pendingUploadFile, setPendingUploadFile] = useState<File | null>(null);
+  const [pendingUploadType, setPendingUploadType] = useState<(typeof typeFilters)[number]>("Facture");
+  const [isLinkChoiceOpen, setIsLinkChoiceOpen] = useState(false);
+  const [selectedClientName, setSelectedClientName] = useState("");
+  const uploadInputRef = useRef<HTMLInputElement | null>(null);
 
   const filteredRows = useMemo(() => {
     return rows.filter((row) => {
@@ -323,11 +122,29 @@ export default function DocumentsPage() {
         row.type.toLowerCase().includes(normalized);
 
       return matchesFilter && matchesType && matchesQuery;
+    }).sort((left, right) => {
+      const leftDate = parseDocumentDate(left.date);
+      const rightDate = parseDocumentDate(right.date);
+      return dateSort === "desc" ? rightDate - leftDate : leftDate - rightDate;
     });
-  }, [filter, query, rows, typeFilter]);
+  }, [dateSort, filter, query, rows, typeFilter]);
 
   useEffect(() => {
+    setAccount(loadAccount());
     setRows(loadDocuments());
+    const storedClients = loadClients();
+    if (storedClients[0]?.name) {
+      setSelectedClientName(storedClients[0].name);
+    }
+  }, []);
+
+  useEffect(() => {
+    function syncAccount() {
+      setAccount(loadAccount());
+    }
+
+    window.addEventListener("atelio-account-updated", syncAccount);
+    return () => window.removeEventListener("atelio-account-updated", syncAccount);
   }, []);
 
   useEffect(() => {
@@ -373,30 +190,87 @@ export default function DocumentsPage() {
     }
   }, [rows]);
 
-  const selectedRow = displayedId ? rows.find((row) => row.id === displayedId) ?? null : null;
-
-  const summary = useMemo(() => {
-    const totalCount = rows.length;
-    const waitingCount = rows.filter((row) => row.status === "En attente").length;
-    const draftCount = rows.filter((row) => row.status === "Brouillon").length;
-    const totalAmount = rows.reduce((sum, row) => sum + parseAmount(row.amount), 0).toLocaleString("fr-FR", {
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 0
-    });
-
-    return {
-      totalCount,
-      waitingCount,
-      draftCount,
-      totalAmount: `${totalAmount} €`
-    };
+  useEffect(() => {
+    setSelectedDocuments((current) => current.filter((id) => rows.some((row) => row.id === id)));
   }, [rows]);
+
+  const selectedRow = displayedId ? rows.find((row) => row.id === displayedId) ?? null : null;
+  const clientOptions = loadClients();
+  const visibleDocumentIds = filteredRows.map((row) => row.id);
+  const allVisibleSelected = visibleDocumentIds.length > 0 && visibleDocumentIds.every((id) => selectedDocuments.includes(id));
+  const someVisibleSelected = visibleDocumentIds.some((id) => selectedDocuments.includes(id));
 
   function updateStatus(id: string, nextStatus: (typeof statuses)[number]) {
     setRows((current) => current.map((row) => (row.id === id ? { ...row, status: nextStatus } : row)));
   }
 
+  function updateAmount(id: string, nextAmount: string) {
+    setRows((current) => current.map((row) => (row.id === id ? { ...row, amount: nextAmount } : row)));
+  }
+
+  function toggleDocumentSelection(id: string) {
+    setSelectedDocuments((current) => (current.includes(id) ? current.filter((item) => item !== id) : [...current, id]));
+  }
+
+  function toggleSelectAllVisible() {
+    setSelectedDocuments((current) => {
+      if (allVisibleSelected) {
+        return current.filter((id) => !visibleDocumentIds.includes(id));
+      }
+
+      const next = new Set(current);
+      visibleDocumentIds.forEach((id) => next.add(id));
+      return Array.from(next);
+    });
+  }
+
+  function downloadSelectedDocuments() {
+    const rowsToDownload = rows.filter((row) => selectedDocuments.includes(row.id));
+    if (rowsToDownload.length === 1) {
+      void downloadDocumentAsPdf(rowsToDownload[0], account);
+      return;
+    }
+
+    void downloadDocumentsAsZip(rowsToDownload, account, "documents-atelio");
+  }
+
+  function deleteSelectedDocuments() {
+    if (!selectedDocuments.length) return;
+
+    const selectedSet = new Set(selectedDocuments);
+    setRows((current) => current.filter((row) => !selectedSet.has(row.id)));
+
+    if (selectedId && selectedSet.has(selectedId)) {
+      setSelectedId(null);
+    }
+
+    setSelectedDocuments([]);
+  }
+
+  function runBulkAction() {
+    if (!selectedDocuments.length || !bulkAction) return;
+
+    if (bulkAction === "download") {
+      downloadSelectedDocuments();
+      setBulkAction("");
+      return;
+    }
+
+    if (window.confirm(`Supprimer ${selectedDocuments.length} document(s) sélectionné(s) ?`)) {
+      deleteSelectedDocuments();
+    }
+    setBulkAction("");
+  }
+
   function duplicateDocument(id: string) {
+    if (!canCreateDocument(account, rows.length)) {
+      setUpgradeModal({
+        title: "Limite de documents atteinte",
+        text: "Le plan Gratuit permet jusqu’à 10 documents. Passe à Pro pour continuer à dupliquer et créer sans limite."
+      });
+      return;
+    }
+
     setRows((current) => {
       const source = current.find((row) => row.id === id);
       if (!source) return current;
@@ -427,8 +301,172 @@ export default function DocumentsPage() {
     );
   }
 
+  function startNewDocument() {
+    window.location.href = "/editor";
+  }
+
+  function startUploadFlow() {
+    setIsCreateChoiceOpen(false);
+    window.setTimeout(() => uploadInputRef.current?.click(), 0);
+  }
+
+  function handleFileSelected(file: File | null) {
+    if (!file) return;
+
+    if (!canCreateDocument(account, rows.length)) {
+      setUpgradeModal({
+        title: "Limite de documents atteinte",
+        text: "Le plan Gratuit permet jusqu’à 10 documents. Passe à Pro pour continuer à déposer et gérer plus de fichiers."
+      });
+      return;
+    }
+
+    setPendingUploadFile(file);
+    setPendingUploadType(guessDocumentTypeFromFileName(file.name) as (typeof typeFilters)[number]);
+    setIsLinkChoiceOpen(true);
+  }
+
+  function attachUploadedFileToClient() {
+    if (!pendingUploadFile || !selectedClientName) return;
+
+    const today = new Date().toISOString().slice(0, 10);
+    const currentDocuments = loadDocuments();
+    const nextDocument = createDocumentEntry(currentDocuments, pendingUploadType, selectedClientName, today);
+    const nextDocuments = [nextDocument, ...currentDocuments];
+
+    saveDocuments(nextDocuments);
+    setRows(nextDocuments);
+    setSelectedId(nextDocument.id);
+    setPendingUploadFile(null);
+    setPendingUploadType("Facture");
+    setIsLinkChoiceOpen(false);
+    clearPendingExternalDocument();
+  }
+
+  function redirectUploadedFileToNewClient() {
+    if (!pendingUploadFile) return;
+
+    const today = new Date().toISOString().slice(0, 10);
+    savePendingExternalDocument({
+      fileName: pendingUploadFile.name,
+      guessedType: pendingUploadType,
+      createdAt: today
+    });
+
+    setPendingUploadFile(null);
+    setPendingUploadType("Facture");
+    setIsLinkChoiceOpen(false);
+    window.location.href = "/clients?create=1";
+  }
+
   return (
     <div className={styles.page}>
+      {upgradeModal ? (
+        <div className="upgrade-overlay" onClick={() => setUpgradeModal(null)}>
+          <div className="upgrade-modal" onClick={(event) => event.stopPropagation()}>
+            <span className="upgrade-kicker">Plan Gratuit</span>
+            <strong className="upgrade-title">{upgradeModal.title}</strong>
+            <p className="upgrade-text">{upgradeModal.text}</p>
+            <div className="upgrade-actions">
+              <button className="button button-secondary" onClick={() => setUpgradeModal(null)} type="button">
+                Plus tard
+              </button>
+              <button
+                className="button button-primary"
+                onClick={() => {
+                  window.location.href = "/abonnement";
+                }}
+                type="button"
+              >
+                Passer à Pro
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {isCreateChoiceOpen ? (
+        <div className={styles.choiceOverlay} onClick={() => setIsCreateChoiceOpen(false)}>
+          <div className={styles.choiceModal} onClick={(event) => event.stopPropagation()}>
+            <span className={styles.detailLabel}>Nouveau document</span>
+            <strong className={styles.choiceTitle}>Choisis ton point de départ</strong>
+            <p className={styles.choiceText}>Tu peux créer un document Atelio Flow ou rattacher un fichier déjà existant.</p>
+            <div className={styles.choiceActions}>
+              <button className="button button-primary" onClick={startNewDocument} type="button">
+                Nouveau document
+              </button>
+              <button className="button button-secondary" onClick={startUploadFlow} type="button">
+                Déposer un fichier
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {isLinkChoiceOpen ? (
+        <div className={styles.choiceOverlay} onClick={() => setIsLinkChoiceOpen(false)}>
+          <div className={styles.choiceModal} onClick={(event) => event.stopPropagation()}>
+            <span className={styles.detailLabel}>Associer le fichier</span>
+            <strong className={styles.choiceTitle}>{pendingUploadFile?.name}</strong>
+            <p className={styles.choiceText}>Choisis si ce document doit être rattaché à un client existant ou à une nouvelle fiche client.</p>
+
+            <label className={styles.choiceField}>
+              <span className={styles.choiceFieldLabel}>Type de document</span>
+              <div className={styles.choiceTypeRow}>
+                {typeFilters
+                  .filter((item) => item !== "Tous")
+                  .map((item) => {
+                    const locked = isLockedType(item, account);
+
+                    return (
+                      <button
+                        className={`${styles.choiceTypeButton} ${pendingUploadType === item ? styles.choiceTypeButtonActive : ""} ${
+                          locked ? styles.choiceTypeButtonLocked : ""
+                        }`}
+                        key={item}
+                        onClick={() => {
+                          if (locked) {
+                            setUpgradeModal({
+                              title: `${item} réservé à Pro`,
+                              text: "Passe à Pro pour déposer aussi des contrats et avenants."
+                            });
+                            return;
+                          }
+                          setPendingUploadType(item);
+                        }}
+                        type="button"
+                      >
+                        {item}
+                        {locked ? <span className={styles.choiceTypeLock}>Pro</span> : null}
+                      </button>
+                    );
+                  })}
+              </div>
+            </label>
+
+            <label className={styles.choiceField}>
+              <span className={styles.choiceFieldLabel}>Client existant</span>
+              <select className={styles.choiceSelect} onChange={(event) => setSelectedClientName(event.target.value)} value={selectedClientName}>
+                {clientOptions.map((client) => (
+                  <option key={client.name} value={client.name}>
+                    {client.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <div className={styles.choiceActions}>
+              <button className="button button-secondary" onClick={redirectUploadedFileToNewClient} type="button">
+                Nouveau client
+              </button>
+              <button className="button button-primary" onClick={attachUploadedFileToClient} type="button">
+                Lier au client
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       <section className={styles.header}>
         <div>
           <div className={styles.tag}>Pilotage</div>
@@ -439,33 +477,20 @@ export default function DocumentsPage() {
             Retrouve, ajuste et fais avancer tous tes devis, factures, contrats et avenants depuis une seule vue.
           </p>
         </div>
-        <a className="button button-primary" href="/editor">
+        <button className="button button-primary" onClick={() => setIsCreateChoiceOpen(true)} type="button">
           + Nouveau document
-        </a>
+        </button>
       </section>
 
-      <section className={styles.summaryGrid}>
-        <article className={styles.summaryCard}>
-          <span className={styles.summaryLabel}>Documents suivis</span>
-          <strong className={styles.summaryValue}>{summary.totalCount}</strong>
-          <span className={styles.summaryMeta}>base active</span>
-        </article>
-        <article className={styles.summaryCard}>
-          <span className={styles.summaryLabel}>Montant cumulé</span>
-          <strong className={styles.summaryValue}>{summary.totalAmount}</strong>
-          <span className={styles.summaryMeta}>sur les documents affichés</span>
-        </article>
-        <article className={styles.summaryCard}>
-          <span className={styles.summaryLabel}>En attente</span>
-          <strong className={styles.summaryValue}>{summary.waitingCount}</strong>
-          <span className={styles.summaryMeta}>à suivre rapidement</span>
-        </article>
-        <article className={styles.summaryCard}>
-          <span className={styles.summaryLabel}>Brouillons</span>
-          <strong className={styles.summaryValue}>{summary.draftCount}</strong>
-          <span className={styles.summaryMeta}>à finaliser</span>
-        </article>
-      </section>
+      <input
+        className={styles.hiddenFileInput}
+        onChange={(event) => {
+          handleFileSelected(event.target.files?.[0] ?? null);
+          event.currentTarget.value = "";
+        }}
+        ref={uploadInputRef}
+        type="file"
+      />
 
       <section className={styles.workspace}>
         <div className={styles.tableWrap}>
@@ -482,27 +507,40 @@ export default function DocumentsPage() {
 
             <div className={styles.filters}>
               <div className={styles.filterGroup}>
-                {filters.map((item) => (
+                {typeFilters.map((item) => (
                   <button
-                    className={`${styles.filter} ${filter === item ? styles.filterActive : ""}`}
+                    className={`${styles.filter} ${typeFilter === item ? styles.filterActive : ""} ${
+                      isLockedType(item, account) ? styles.filterLocked : ""
+                    }`}
                     key={item}
-                    onClick={() => setFilter(item)}
+                    onClick={() => {
+                      if (isLockedType(item, account)) {
+                        setUpgradeModal({
+                          title: `${item} réservé à Pro`,
+                          text: "Passe à Pro pour filtrer et gérer aussi tes contrats et avenants depuis l’espace Documents."
+                        });
+                        return;
+                      }
+
+                      setTypeFilter(item);
+                    }}
                     type="button"
                   >
                     {item}
+                    {isLockedType(item, account) ? <span className={styles.lockDot}>Pro</span> : null}
                   </button>
                 ))}
               </div>
 
               <div className={styles.filterGroup}>
                 <label className={styles.sortWrap}>
-                  <span className={styles.sortLabel}>Trier par</span>
+                  <span className={styles.sortLabel}>Statut</span>
                   <select
                     className={styles.sortSelect}
-                    onChange={(event) => setTypeFilter(event.target.value as (typeof typeFilters)[number])}
-                    value={typeFilter}
+                    onChange={(event) => setFilter(event.target.value as (typeof filters)[number])}
+                    value={filter}
                   >
-                    {typeFilters.map((item) => (
+                    {filters.map((item) => (
                       <option key={item} value={item}>
                         {item}
                       </option>
@@ -513,14 +551,52 @@ export default function DocumentsPage() {
             </div>
           </div>
 
+          <div className={styles.bulkBar}>
+            <label className={styles.bulkCheckbox}>
+              <input
+                checked={allVisibleSelected}
+                onChange={toggleSelectAllVisible}
+                ref={(node) => {
+                  if (node) {
+                    node.indeterminate = someVisibleSelected && !allVisibleSelected;
+                  }
+                }}
+                type="checkbox"
+              />
+              <span>Sélectionner les résultats</span>
+            </label>
+
+            <div className={styles.bulkControls}>
+              <select className={styles.bulkSelect} onChange={(event) => setBulkAction(event.target.value as BulkAction)} value={bulkAction}>
+                <option value="">Action sur la sélection</option>
+                <option value="download">Télécharger PDF</option>
+                <option value="delete">Supprimer</option>
+              </select>
+              <button className="button button-secondary" disabled={!selectedDocuments.length || !bulkAction} onClick={runBulkAction} type="button">
+                Appliquer
+              </button>
+              {selectedDocuments.length ? <span className={styles.selectionCount}>{selectedDocuments.length} sélectionné(s)</span> : null}
+            </div>
+          </div>
+
           <div className={styles.tableScroll}>
             <table className={styles.table}>
               <thead>
                 <tr>
+                  <th />
                   <th>Référence</th>
                   <th>Client</th>
                   <th>Type</th>
-                  <th>Date</th>
+                  <th>
+                    <button
+                      className={styles.sortHeader}
+                      onClick={() => setDateSort((current) => (current === "desc" ? "asc" : "desc"))}
+                      type="button"
+                    >
+                      Date
+                      <span className={`${styles.sortArrow} ${dateSort === "asc" ? styles.sortArrowAsc : ""}`}>↑</span>
+                    </button>
+                  </th>
                   <th>Échéance</th>
                   <th>Montant</th>
                   <th>Statut</th>
@@ -533,6 +609,9 @@ export default function DocumentsPage() {
                       className={row.id === selectedId ? styles.rowActive : ""}
                       onClick={() => setSelectedId((current) => (current === row.id ? null : row.id))}
                     >
+                      <td onClick={(event) => event.stopPropagation()}>
+                        <input checked={selectedDocuments.includes(row.id)} onChange={() => toggleDocumentSelection(row.id)} type="checkbox" />
+                      </td>
                       <td className={styles.mono}>{row.id}</td>
                       <td className={styles.strong}>{row.client}</td>
                       <td>
@@ -548,7 +627,7 @@ export default function DocumentsPage() {
 
                     {displayedId === row.id && selectedRow ? (
                       <tr className={styles.detailRow}>
-                        <td className={styles.detailCell} colSpan={7}>
+                        <td className={styles.detailCell} colSpan={8}>
                           <div
                             className={`${styles.detailCard} ${selectedId === row.id ? styles.detailCardOpen : styles.detailCardClosed}`}
                           >
@@ -572,7 +651,11 @@ export default function DocumentsPage() {
                               </div>
                               <div className={styles.detailItem}>
                                 <span className={styles.detailLabel}>Montant</span>
-                                <strong>{selectedRow.amount}</strong>
+                                <input
+                                  className={styles.amountInput}
+                                  onChange={(event) => updateAmount(selectedRow.id, event.target.value)}
+                                  value={selectedRow.amount}
+                                />
                               </div>
                               <label className={styles.detailItem}>
                                 <span className={styles.detailLabel}>Statut</span>
@@ -594,12 +677,6 @@ export default function DocumentsPage() {
 
                             <div className={styles.actionStack}>
                               <a
-                                className="button button-primary"
-                                href={`/editor?doc=${encodeURIComponent(selectedRow.id)}`}
-                              >
-                                Ouvrir dans l’éditeur
-                              </a>
-                              <a
                                 className="button button-secondary"
                                 href={`/clients?client=${encodeURIComponent(selectedRow.client)}`}
                               >
@@ -607,27 +684,11 @@ export default function DocumentsPage() {
                               </a>
                               <button
                                 className="button button-secondary"
-                                onClick={() => handleDownloadDocument(selectedRow)}
+                                onClick={() => void downloadDocumentAsPdf(selectedRow, account)}
                                 type="button"
                               >
                                 Télécharger PDF
                               </button>
-                              <button
-                                className="button button-secondary"
-                                onClick={() => duplicateDocument(selectedRow.id)}
-                                type="button"
-                              >
-                                Dupliquer
-                              </button>
-                              {selectedRow.type === "Devis" ? (
-                                <button
-                                  className="button button-secondary"
-                                  onClick={() => convertToInvoice(selectedRow.id)}
-                                  type="button"
-                                >
-                                  Convertir en facture
-                                </button>
-                              ) : null}
                             </div>
 
                             <div className={styles.timeline}>

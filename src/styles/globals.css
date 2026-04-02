@@ -154,3 +154,51 @@ textarea {
   background: rgba(76, 147, 184, 0.12);
   border-color: rgba(76, 147, 184, 0.14);
 }
+
+.upgrade-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 220;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(23, 18, 13, 0.42);
+  backdrop-filter: blur(8px);
+}
+
+.upgrade-modal {
+  width: min(520px, 100%);
+  display: grid;
+  gap: 14px;
+  padding: 22px;
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.96);
+  border: 1px solid var(--line);
+  box-shadow: 0 24px 60px rgba(43, 31, 20, 0.16);
+}
+
+.upgrade-kicker {
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.upgrade-title {
+  font-size: 1.35rem;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+}
+
+.upgrade-text {
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.upgrade-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}

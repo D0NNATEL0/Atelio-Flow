@@ -12,11 +12,9 @@ function getStatusClass(status: string) {
 }
 
 export default function DashboardPage() {
-  const [period, setPeriod] = useState<"semaine" | "mois" | "annee">("mois");
-  const [selectedWeek, setSelectedWeek] = useState("2026-W14");
+  const [period, setPeriod] = useState<"mois" | "annee">("mois");
   const [selectedMonth, setSelectedMonth] = useState("04");
   const [selectedYear, setSelectedYear] = useState("2026");
-  const [comparison, setComparison] = useState<"precedente" | "annee">("precedente");
   const monthOptions = [
     { value: "01", label: "Jan" },
     { value: "02", label: "Fev" },
@@ -34,18 +32,6 @@ export default function DashboardPage() {
   const yearOptions = ["2024", "2025", "2026", "2027"] as const;
 
   const chartData = useMemo(() => {
-    if (period === "semaine") {
-      return [
-        { label: "Lun", value: 2400 },
-        { label: "Mar", value: 1850 },
-        { label: "Mer", value: 3120 },
-        { label: "Jeu", value: 2740 },
-        { label: "Ven", value: 3560 },
-        { label: "Sam", value: 920 },
-        { label: "Dim", value: 640 }
-      ];
-    }
-
     if (period === "annee") {
       return [
         { label: "Jan", value: 18400 },
@@ -149,13 +135,12 @@ export default function DashboardPage() {
     return {
       total: `${total.toLocaleString("fr-FR")} €`,
       average: `${average.toLocaleString("fr-FR")} €`,
-      peak,
-      comparisonLabel: comparison === "precedente" ? "vs période précédente" : "vs année précédente",
-      comparisonValue: comparison === "precedente" ? "+12,4%" : "+8,1%"
+      peak
     };
-  }, [chartData, comparison]);
+  }, [chartData]);
 
   const maxValue = Math.max(...chartData.map((item) => item.value));
+  const selectedMonthLabel = monthOptions.find((month) => month.value === selectedMonth)?.label ?? "Avr";
 
   return (
     <div className={styles.page}>
@@ -175,31 +160,26 @@ export default function DashboardPage() {
         <div className={styles.revenueHead}>
           <div>
             <div className={styles.revenueLabel}>Suivi du chiffre d’affaires</div>
-            <h2 className={styles.revenueTitle}>CA sur la période choisie</h2>
+            <h2 className={styles.revenueTitle}>
+              {period === "mois" ? `CA du mois de ${selectedMonthLabel} ${selectedYear}` : `CA de l'année ${selectedYear}`}
+            </h2>
           </div>
 
           <div className={styles.revenueControls}>
             <div className={styles.segmented}>
-                  {(["semaine", "mois", "annee"] as const).map((item) => (
-                    <button
-                      className={`${styles.segmentButton} ${period === item ? styles.segmentButtonActive : ""}`}
-                      key={item}
-                      onClick={() => setPeriod(item)}
-                      type="button"
-                    >
-                  {item === "semaine" ? "Semaine" : item === "mois" ? "Mois" : "Année"}
-                    </button>
-                  ))}
-                </div>
+              {(["mois", "annee"] as const).map((item) => (
+                <button
+                  className={`${styles.segmentButton} ${period === item ? styles.segmentButtonActive : ""}`}
+                  key={item}
+                  onClick={() => setPeriod(item)}
+                  type="button"
+                >
+                  {item === "mois" ? "Mois" : "Année"}
+                </button>
+              ))}
+            </div>
 
-            {period === "semaine" ? (
-              <input
-                className={styles.dateInput}
-                onChange={(event) => setSelectedWeek(event.target.value)}
-                type="week"
-                value={selectedWeek}
-              />
-            ) : (
+            <div className={styles.periodSelectors}>
               <select
                 className={styles.compareSelect}
                 onChange={(event) => setSelectedYear(event.target.value)}
@@ -211,16 +191,7 @@ export default function DashboardPage() {
                   </option>
                 ))}
               </select>
-            )}
-
-            <select
-              className={styles.compareSelect}
-              onChange={(event) => setComparison(event.target.value as "precedente" | "annee")}
-              value={comparison}
-            >
-              <option value="precedente">Comparer à la période précédente</option>
-              <option value="annee">Comparer à l’année précédente</option>
-            </select>
+            </div>
           </div>
         </div>
 
@@ -244,12 +215,14 @@ export default function DashboardPage() {
             <article className={styles.revenueStatCard}>
               <span className={styles.revenueStatLabel}>CA cumulé</span>
               <strong className={styles.revenueStatValue}>{revenueSummary.total}</strong>
-              <span className={styles.revenueStatMeta}>{revenueSummary.comparisonValue} {revenueSummary.comparisonLabel}</span>
+              <span className={styles.revenueStatMeta}>
+                {period === "mois" ? `sur ${selectedMonthLabel.toLowerCase()} ${selectedYear}` : `sur l'année ${selectedYear}`}
+              </span>
             </article>
             <article className={styles.revenueStatCard}>
               <span className={styles.revenueStatLabel}>Moyenne</span>
               <strong className={styles.revenueStatValue}>{revenueSummary.average}</strong>
-              <span className={styles.revenueStatMeta}>par {period === "semaine" ? "jour" : period === "mois" ? "semaine" : "mois"}</span>
+              <span className={styles.revenueStatMeta}>par {period === "mois" ? "semaine" : "mois"}</span>
             </article>
             <article className={styles.revenueStatCard}>
               <span className={styles.revenueStatLabel}>Pic observé</span>

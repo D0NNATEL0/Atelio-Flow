@@ -2,7 +2,8 @@ export const navItems = [
   { href: "/", label: "Dashboard", icon: "▦" },
   { href: "/documents", label: "Documents", icon: "◫", badge: "6" },
   { href: "/clients", label: "Clients", icon: "◉" },
-  { href: "/editor", label: "Éditeur", icon: "✎" }
+  { href: "/editor", label: "Éditeur", icon: "✎" },
+  { href: "/compte", label: "Compte", icon: "⚙" }
 ] as const;
 
 export const documentRows = [

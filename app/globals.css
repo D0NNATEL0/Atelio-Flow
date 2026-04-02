@@ -1,4 +1,10 @@
 :root {
+  --brand-font:
+    "Avenir Next",
+    "Avenir",
+    "Segoe UI",
+    "Helvetica Neue",
+    sans-serif;
   --background: #f9f4ee;
   --surface: rgba(255, 255, 255, 0.84);
   --surface-strong: #fff8f2;
@@ -28,12 +34,7 @@ html {
 body {
   margin: 0;
   min-height: 100vh;
-  font-family:
-    "Avenir Next",
-    "Avenir",
-    "Segoe UI",
-    "Helvetica Neue",
-    sans-serif;
+  font-family: var(--brand-font);
   color: var(--text);
   background:
     radial-gradient(circle at 15% 15%, rgba(242, 140, 40, 0.22), transparent 18%),
@@ -878,7 +879,7 @@ button {
 .home-priority-head,
 .home-section-head {
   display: flex;
-  align-items: start;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 14px;
 }
@@ -893,7 +894,7 @@ button {
 .home-activity-item,
 .home-watch-item {
   display: flex;
-  align-items: start;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 14px;
   padding: 14px 16px;
@@ -908,7 +909,7 @@ button {
 
 .home-activity-item,
 .home-watch-item {
-  justify-content: start;
+  justify-content: flex-start;
 }
 
 .home-activity-dot {
@@ -958,7 +959,7 @@ button {
 
 .revenue-head {
   display: flex;
-  align-items: end;
+  align-items: flex-end;
   justify-content: space-between;
   gap: 16px;
 }
@@ -999,7 +1000,7 @@ button {
   display: grid;
   grid-template-columns: repeat(31, minmax(0, 1fr));
   gap: 4px;
-  align-items: end;
+  align-items: flex-end;
   min-height: 200px;
   padding-top: 10px;
   border-top: 1px solid rgba(17, 17, 17, 0.06);
@@ -1016,7 +1017,7 @@ button {
   max-width: 10px;
   height: 170px;
   display: flex;
-  align-items: end;
+  align-items: flex-end;
   border-radius: 999px;
   background: linear-gradient(180deg, rgba(17, 17, 17, 0.04), rgba(17, 17, 17, 0.08));
   overflow: hidden;
@@ -1060,7 +1061,7 @@ button {
 
 .content-grid {
   grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.8fr);
-  align-items: start;
+  align-items: flex-start;
 }
 
 .overview-grid {
@@ -1192,7 +1193,7 @@ button {
 
 .account-actions {
   display: flex;
-  align-items: end;
+  align-items: flex-end;
   justify-content: space-between;
   gap: 16px;
 }
@@ -1237,7 +1238,7 @@ button {
   display: grid;
   grid-template-columns: minmax(0, 1.05fr) minmax(380px, 0.95fr);
   gap: 18px;
-  align-items: start;
+  align-items: flex-start;
 }
 
 .quote-builder-panel {
@@ -1395,7 +1396,7 @@ button {
 .quote-preview-line,
 .quote-preview-legal {
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  align-items: start;
+  align-items: flex-start;
 }
 
 .quote-preview-brand {
@@ -1762,7 +1763,7 @@ button {
 }
 
 .management-grid {
-  align-items: start;
+  align-items: flex-start;
 }
 
 .management-grid-full {
@@ -1800,7 +1801,7 @@ button {
 
 .studio-head {
   display: flex;
-  align-items: start;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 14px;
   margin-bottom: 14px;
@@ -2107,8 +2108,51 @@ button {
     linear-gradient(180deg, rgba(255, 252, 247, 0.96), rgba(255, 255, 255, 0.88));
 }
 
+.auth-brand-row {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  flex-wrap: wrap;
+}
+
+.auth-brand-mark {
+  width: 82px;
+  height: 82px;
+  display: grid;
+  place-items: center;
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.74);
+  border: 1px solid rgba(17, 17, 17, 0.05);
+  box-shadow: var(--shadow-soft);
+}
+
+.auth-brand-logo {
+  width: 56px;
+  height: 56px;
+  object-fit: contain;
+}
+
+.auth-brand-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--brand-font);
+  font-weight: 500;
+  min-height: 72px;
+  padding: 0 30px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.7);
+  border: 1px solid rgba(17, 17, 17, 0.04);
+  color: #3a3632;
+  font-size: clamp(2rem, 4vw, 2.4rem);
+  line-height: 1;
+  letter-spacing: -0.045em;
+  box-shadow: var(--shadow-soft);
+}
+
 .auth-title {
-  margin: 18px 0 8px;
+  margin: 22px 0 8px;
+  font-family: var(--brand-font);
   font-size: clamp(2.1rem, 5vw, 3.6rem);
   line-height: 0.95;
   letter-spacing: -0.04em;
@@ -2211,6 +2255,29 @@ button {
 
 .auth-footer {
   margin-top: 20px;
+}
+
+@media (max-width: 640px) {
+  .auth-brand-row {
+    gap: 14px;
+  }
+
+  .auth-brand-mark {
+    width: 72px;
+    height: 72px;
+    border-radius: 20px;
+  }
+
+  .auth-brand-logo {
+    width: 48px;
+    height: 48px;
+  }
+
+  .auth-brand-pill {
+    min-height: 60px;
+    padding: 0 24px;
+    font-size: 1.7rem;
+  }
 }
 
 .plan-tag {
@@ -2322,7 +2389,7 @@ button {
 
   .revenue-head {
     flex-direction: column;
-    align-items: start;
+    align-items: flex-start;
   }
 
   .revenue-side,

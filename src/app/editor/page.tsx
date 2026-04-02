@@ -3,8 +3,12 @@
 import type { CSSProperties, FormEvent } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import styles from "./page.module.css";
+import { canCreateDocument, canUseLockedDocumentTypes, defaultAccount, loadAccount, type StoredAccount } from "@/lib/account-store";
+import { downloadElementAsPdf } from "@/lib/pdf-export";
 import {
   defaultClients,
+  getNextDocumentNumber,
+  getDocumentPrefix,
   loadClients,
   loadDocuments,
   saveClients,
@@ -21,7 +25,7 @@ type LineItem = {
   id: number;
   description: string;
   quantity: number;
-  unitPrice: number;
+  unitPrice: string;
 };
 
 const docTypes: { id: DocumentType; label: string; badge: string; note: string }[] = [
@@ -31,10 +35,16 @@ const docTypes: { id: DocumentType; label: string; badge: string; note: string }
   { id: "avenant", label: "Avenant", badge: "Avenant", note: "Acte modificatif rattaché à un document initial déjà signé." }
 ];
 
+const editorSteps = [
+  { id: "type", short: "Type", title: "Quel document veux-tu créer ?", description: "Choisis d’abord le format le plus adapté à ton besoin." },
+  { id: "recipient", short: "Coordonnées", title: "Coordonnées et destinataire", description: "Renseigne les informations principales du document et à qui il s’adresse." },
+  { id: "issuer", short: "Émetteur", title: "Identité émetteur", description: "Vérifie les informations légales et la présentation de ton entreprise." },
+  { id: "content", short: "Contenu", title: "Contenu du document", description: "Ajoute les prestations ou les clauses selon le type choisi." },
+  { id: "finalize", short: "Finaliser", title: "Finaliser et exporter", description: "Ajuste les derniers paramètres puis enregistre ou télécharge ton document." }
+] as const;
+
 const initialLines: LineItem[] = [
-  { id: 1, description: "Développement frontend — Module auth", quantity: 1, unitPrice: 2500 },
-  { id: 2, description: "Design UI/UX — 3 écrans", quantity: 3, unitPrice: 450 },
-  { id: 3, description: "Intégration API REST", quantity: 1, unitPrice: 800 }
+  { id: 1, description: "Nouvelle prestation", quantity: 1, unitPrice: "0" }
 ];
 
 function formatCurrency(value: number) {
@@ -101,6 +111,7 @@ function autoResizeTextarea(event: FormEvent<HTMLTextAreaElement>) {
 
 export default function EditorPage() {
   const previewRef = useRef<HTMLElement | null>(null);
+  const [account, setAccount] = useState<StoredAccount>(defaultAccount());
   const [docType, setDocType] = useState<DocumentType>("facture");
   const [recipientMode, setRecipientMode] = useState<RecipientMode>("client");
   const [clients, setClients] = useState<StoredClient[]>(defaultClients());
@@ -110,27 +121,35 @@ export default function EditorPage() {
   const [issueDate, setIssueDate] = useState("2026-04-01");
   const [dueDate, setDueDate] = useState("2026-04-30");
   const [hasDiscount, setHasDiscount] = useState(true);
+  const [hasTax, setHasTax] = useState(true);
+  const [priceMode, setPriceMode] = useState<"ht" | "ttc">("ht");
   const [discountRate, setDiscountRate] = useState("5");
   const [taxRate, setTaxRate] = useState("20");
   const [footerNote, setFooterNote] = useState("Merci pour votre confiance.");
   const [paymentTerms, setPaymentTerms] = useState("30 jours net");
-  const [companyName, setCompanyName] = useState("Atelio Studio");
+  const [companyName, setCompanyName] = useState("Atelio Flow");
   const [companyAddress, setCompanyAddress] = useState("123 rue de la Paix");
   const [companyMeta, setCompanyMeta] = useState("75001 Paris · SIRET 123 456 789 00012");
+  const [companyLogoUrl, setCompanyLogoUrl] = useState("");
   const [clientMeta, setClientMeta] = useState("456 avenue des Tech · 69002 Lyon · compta@client.fr");
   const [pageBackground, setPageBackground] = useState("#ffffff");
   const [accentColor, setAccentColor] = useState("#ea9038");
   const [textColor, setTextColor] = useState("#1f1b16");
-  const [contractObject, setContractObject] = useState("Le présent contrat encadre la collaboration entre Atelio Studio et le client pour la réalisation des livrables définis ci-dessous.");
+  const [secondaryTextColor, setSecondaryTextColor] = useState("#7b7269");
+  const [contractObject, setContractObject] = useState("Le présent contrat encadre la collaboration entre Atelio Flow et le client pour la réalisation des livrables définis ci-dessous.");
   const [contractScope, setContractScope] = useState("Création, production et livraison des éléments convenus, avec échanges de validation à chaque étape importante.");
   const [contractTerms, setContractTerms] = useState("Le client transmet ses contenus et retours dans des délais raisonnables. Toute demande hors périmètre fait l’objet d’un accord complémentaire.");
   const [amendmentReference, setAmendmentReference] = useState("Contrat CTR-2026-012 du 15/03/2026");
   const [amendmentObject, setAmendmentObject] = useState("Le présent avenant a pour objet de modifier et compléter le document d’origine afin d’intégrer les ajustements convenus entre les parties.");
   const [amendmentChanges, setAmendmentChanges] = useState("Les parties conviennent de mettre à jour le périmètre de mission, le calendrier d’exécution et, le cas échéant, les conditions opérationnelles liées à la prestation.");
   const [amendmentCarryOver, setAmendmentCarryOver] = useState("Toutes les autres clauses du document initial demeurent inchangées et continuent de produire leurs effets, sauf stipulation contraire expressément prévue au présent avenant.");
-  const [companySignatory, setCompanySignatory] = useState("Mathis — Atelio Studio");
+  const [companySignatory, setCompanySignatory] = useState("Mathis — Atelio Flow");
   const [clientSignatory, setClientSignatory] = useState("Nom du représentant client");
   const [lines, setLines] = useState<LineItem[]>(initialLines);
+  const [stepIndex, setStepIndex] = useState(0);
+  const [upgradeModal, setUpgradeModal] = useState<{ title: string; text: string } | null>(null);
+  const [isEditingExistingDocument, setIsEditingExistingDocument] = useState(false);
+  const [hasManualNumberEdit, setHasManualNumberEdit] = useState(false);
 
   const clientDirectory = useMemo(
     () =>
@@ -153,12 +172,26 @@ export default function EditorPage() {
   const recipientDocumentsHref = `/documents?client=${encodeURIComponent(displayedRecipientName)}`;
 
   useEffect(() => {
-    const storedClients = loadClients();
-    setClients(storedClients);
-    if (storedClients[0]?.name) {
-      setClientName(storedClients[0].name);
-      setClientMeta(storedClients[0].coordinates);
+    function syncWorkspace() {
+      const nextAccount = loadAccount();
+      const storedClients = loadClients();
+      setAccount(nextAccount);
+      setCompanyName(nextAccount.companyName);
+      setCompanyAddress(nextAccount.companyAddress);
+      setCompanyMeta(nextAccount.companyMeta);
+      setCompanyLogoUrl(nextAccount.logoUrl);
+      setPaymentTerms(nextAccount.defaultPaymentTerms);
+      setFooterNote(nextAccount.footerNote);
+      setClients(storedClients);
+      if (storedClients[0]?.name) {
+        setClientName(storedClients[0].name);
+        setClientMeta(storedClients[0].coordinates);
+      }
     }
+
+    syncWorkspace();
+    window.addEventListener("atelio-account-updated", syncWorkspace);
+    return () => window.removeEventListener("atelio-account-updated", syncWorkspace);
   }, []);
 
   useEffect(() => {
@@ -173,6 +206,8 @@ export default function EditorPage() {
       const storedDocument = loadDocuments().find((row) => row.id === documentId);
       if (!storedDocument) return;
 
+      setIsEditingExistingDocument(true);
+      setHasManualNumberEdit(true);
       setDocType(mapStoredType(storedDocument.type));
       setNumber(storedDocument.id.split("-").slice(1).join("-") || storedDocument.id);
 
@@ -208,14 +243,30 @@ export default function EditorPage() {
     }
   }, [clients]);
 
+  useEffect(() => {
+    if (isEditingExistingDocument || hasManualNumberEdit) return;
+
+    const nextNumber = getNextDocumentNumber(loadDocuments(), docType, issueDate);
+    setNumber(nextNumber);
+  }, [docType, issueDate, hasManualNumberEdit, isEditingExistingDocument]);
+
   const subtotal = useMemo(
-    () => lines.reduce((total, line) => total + line.quantity * line.unitPrice, 0),
+    () => lines.reduce((total, line) => total + line.quantity * numberFromValue(line.unitPrice), 0),
     [lines]
   );
-  const discountAmount = hasDiscount ? subtotal * (numberFromValue(discountRate) / 100) : 0;
-  const subtotalAfterDiscount = subtotal - discountAmount;
-  const taxAmount = subtotalAfterDiscount * (numberFromValue(taxRate) / 100);
+  const currentStep = editorSteps[stepIndex];
+  const progress = ((stepIndex + 1) / editorSteps.length) * 100;
+  const effectiveTaxRate = hasTax ? numberFromValue(taxRate) / 100 : 0;
+  const subtotalHtBeforeDiscount =
+    priceMode === "ht" ? subtotal : effectiveTaxRate > 0 ? subtotal / (1 + effectiveTaxRate) : subtotal;
+  const subtotalTtcBeforeDiscount = hasTax ? subtotalHtBeforeDiscount * (1 + effectiveTaxRate) : subtotalHtBeforeDiscount;
+  const discountAmount = hasDiscount ? subtotalHtBeforeDiscount * (numberFromValue(discountRate) / 100) : 0;
+  const subtotalAfterDiscount = subtotalHtBeforeDiscount - discountAmount;
+  const taxAmount = hasTax ? subtotalAfterDiscount * effectiveTaxRate : 0;
   const total = subtotalAfterDiscount + taxAmount;
+  const summaryPriceModeLabel = priceMode === "ht" ? "Prix saisis en HT" : "Prix saisis en TTC";
+  const summaryTaxLabel = hasTax ? `TVA appliquée (${taxRate || "0"}%)` : "Sans TVA";
+  const summaryDiscountLabel = hasDiscount ? `Remise ${discountRate || "0"}%` : "Sans remise";
 
   function updateLine(id: number, patch: Partial<LineItem>) {
     setLines((current) => current.map((line) => (line.id === id ? { ...line, ...patch } : line)));
@@ -228,7 +279,7 @@ export default function EditorPage() {
         id: Date.now(),
         description: "Nouvelle prestation",
         quantity: 1,
-        unitPrice: 0
+        unitPrice: "0"
       }
     ]);
   }
@@ -237,95 +288,25 @@ export default function EditorPage() {
     setLines((current) => (current.length > 1 ? current.filter((line) => line.id !== id) : current));
   }
 
+  function goToPreviousStep() {
+    setStepIndex((current) => Math.max(0, current - 1));
+  }
+
+  function goToNextStep() {
+    setStepIndex((current) => Math.min(editorSteps.length - 1, current + 1));
+  }
+
+  function openUpgradeModal(title: string, text: string) {
+    setUpgradeModal({ title, text });
+  }
+
   function handleDownloadPdf() {
-    persistDocument("Brouillon");
-    const previewMarkup = previewRef.current?.outerHTML;
-
-    if (!previewMarkup) {
+    const saved = persistDocument("Brouillon");
+    if (!saved) return;
+    if (!previewRef.current) {
       return;
     }
-
-    const printWindow = window.open("", "_blank", "width=1024,height=1440");
-
-    if (!printWindow) {
-      return;
-    }
-
-    const safeTitle = `${selectedType.badge}-${number}`.replace(/\s+/g, "-");
-    const stylesheetMarkup = Array.from(
-      document.querySelectorAll('style, link[rel="stylesheet"]')
-    )
-      .map((node) => node.outerHTML)
-      .join("");
-
-    printWindow.document.write(`
-      <!DOCTYPE html>
-      <html lang="fr">
-        <head>
-          <meta charset="UTF-8" />
-          <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-          <title>${safeTitle}</title>
-          ${stylesheetMarkup}
-          <style>
-            @page {
-              size: A4;
-              margin: 14mm;
-            }
-
-            * {
-              box-sizing: border-box;
-            }
-
-            html, body {
-              margin: 0;
-              padding: 0;
-              background: #f6f2ec;
-              font-family: inherit;
-              color: ${textColor};
-            }
-
-            body {
-              padding: 24px;
-            }
-
-            .print-shell {
-              max-width: 900px;
-              margin: 0 auto;
-            }
-
-            .print-shell > * {
-              box-shadow: none !important;
-            }
-
-            @media print {
-              body {
-                padding: 0;
-                background: #fff;
-              }
-
-              .print-shell {
-                max-width: none;
-              }
-
-              .print-shell > * {
-                border-radius: 0 !important;
-              }
-            }
-          </style>
-        </head>
-        <body>
-          <div class="print-shell">
-            ${previewMarkup}
-          </div>
-        </body>
-      </html>
-    `);
-
-    printWindow.document.close();
-    printWindow.focus();
-    window.setTimeout(() => {
-      printWindow.print();
-    }, 250);
+    void downloadElementAsPdf(previewRef.current, `${saved}.pdf`);
   }
 
   function handleSelectClient(nextClient: string) {
@@ -334,24 +315,24 @@ export default function EditorPage() {
   }
 
   function persistDocument(nextStatus: string) {
+    if ((docType === "contrat" || docType === "avenant") && !canUseLockedDocumentTypes(account)) {
+      openUpgradeModal("Fonction Pro", "Les contrats et avenants sont réservés au plan Pro.");
+      return null;
+    }
+
     const recipientName = recipientMode === "client" ? clientName : customRecipientName.trim() || "Nom libre";
     const nextClientEmail =
       recipientMode === "client"
         ? clients.find((client) => client.name === clientName)?.contactEmail
         : clientMeta.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0];
 
-    const nextClients = upsertClientFromDocument(clients, {
-      name: recipientName,
-      email: nextClientEmail,
-      coordinates: clientMeta
-    });
     const nextDocuments = loadDocuments();
     const documentTypeLabel =
       docType === "facture" ? "Facture" : docType === "devis" ? "Devis" : docType === "contrat" ? "Contrat" : "Avenant";
     const amountValue = isInvoiceFamily ? formatCurrency(total) : "0,00 €";
 
     const nextDocument: StoredDocument = {
-      id: `${docType === "facture" ? "FAC" : docType === "devis" ? "DEV" : docType === "contrat" ? "CTR" : "AVE"}-${number}`,
+      id: `${getDocumentPrefix(documentTypeLabel)}-${number}`,
       client: recipientName,
       date: issueDate,
       due: dueDate || "—",
@@ -361,25 +342,103 @@ export default function EditorPage() {
     };
 
     const existingIndex = nextDocuments.findIndex((row) => row.id === nextDocument.id);
+    if (existingIndex < 0 && !canCreateDocument(account, nextDocuments.length)) {
+      openUpgradeModal(
+        "Limite de documents atteinte",
+        "Le plan Gratuit permet jusqu’à 10 documents. Passe à Pro pour continuer à créer et enregistrer sans limite."
+      );
+      return null;
+    }
+
     if (existingIndex >= 0) {
       nextDocuments[existingIndex] = nextDocument;
     } else {
       nextDocuments.unshift(nextDocument);
     }
 
+    const hydratedClients = upsertClientFromDocument(clients, {
+      name: recipientName,
+      email: nextClientEmail,
+      coordinates: clientMeta
+    });
+    const nextHydratedClients = hydratedClients.map((client) => {
+      const linkedDocs = nextDocuments.filter((row) => row.client === client.name);
+      const totalValue = linkedDocs.reduce((sum, row) => {
+        const parsed = Number(row.amount.replace(/[^\d,]/g, "").replace(",", ".")) || 0;
+        return sum + parsed;
+      }, 0);
+
+      return {
+        ...client,
+        docs: linkedDocs.length,
+        total: `${totalValue.toLocaleString("fr-FR", { minimumFractionDigits: 0, maximumFractionDigits: 0 })} €`
+      };
+    });
+
     saveDocuments(nextDocuments);
-    saveClients(nextClients);
-    setClients(nextClients);
+    saveClients(nextHydratedClients);
+    setClients(nextHydratedClients);
+    return nextDocument.id;
   }
 
   return (
     <div className={styles.page}>
+      {upgradeModal ? (
+        <div className="upgrade-overlay" onClick={() => setUpgradeModal(null)}>
+          <div className="upgrade-modal" onClick={(event) => event.stopPropagation()}>
+            <span className="upgrade-kicker">Plan Gratuit</span>
+            <strong className="upgrade-title">{upgradeModal.title}</strong>
+            <p className="upgrade-text">{upgradeModal.text}</p>
+            <div className="upgrade-actions">
+              <button className="button button-secondary" onClick={() => setUpgradeModal(null)} type="button">
+                Plus tard
+              </button>
+              <button
+                className="button button-primary"
+                onClick={() => {
+                  window.location.href = "/abonnement";
+                }}
+                type="button"
+              >
+                Passer à Pro
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       <section className={styles.header}>
         <div>
           <div className={styles.tag}>Création</div>
           <h1 className={styles.title}>
             <span className={styles.gradient}>Éditeur Devis · Facture · Contrat</span>
           </h1>
+        </div>
+      </section>
+
+      <section className={styles.stepperPanel}>
+        <div className={styles.stepperHeader}>
+          <div>
+            <span className={styles.stepperLabel}>Parcours guidé</span>
+            <strong className={styles.stepperTitle}>Étape {stepIndex + 1} sur {editorSteps.length}</strong>
+          </div>
+          <span className={styles.stepperCurrent}>{currentStep.title}</span>
+        </div>
+        <div className={styles.stepTrack}>
+          <div className={styles.stepProgress} style={{ width: `${progress}%` }} />
+        </div>
+        <div className={styles.stepList}>
+          {editorSteps.map((step, index) => (
+            <button
+              className={`${styles.stepChip} ${index === stepIndex ? styles.stepChipActive : ""} ${index < stepIndex ? styles.stepChipDone : ""}`}
+              key={step.id}
+              onClick={() => setStepIndex(index)}
+              type="button"
+            >
+              <span className={styles.stepNumber}>{index + 1}</span>
+              <span>{step.short}</span>
+            </button>
+          ))}
         </div>
       </section>
 
@@ -392,17 +451,23 @@ export default function EditorPage() {
               {
                 "--editor-page-background": pageBackground,
                 "--editor-accent-color": accentColor,
-                "--editor-text-color": textColor
+                "--editor-text-color": textColor,
+                "--editor-secondary-text-color": secondaryTextColor
               } as CSSProperties
             }
           >
             <div className={styles.docHead}>
-              <div>
-                <div className={styles.companyName}>{companyName}</div>
-                <div className={styles.muted}>
-                  {companyAddress}
-                  <br />
-                  {companyMeta}
+              <div className={styles.brandBlock}>
+                {companyLogoUrl ? (
+                  <img alt="Logo entreprise" className={styles.companyLogo} src={companyLogoUrl} />
+                ) : null}
+                <div>
+                  <div className={styles.companyName}>{companyName}</div>
+                  <div className={styles.muted}>
+                    {companyAddress}
+                    <br />
+                    {companyMeta}
+                  </div>
                 </div>
               </div>
               <div>
@@ -520,8 +585,8 @@ export default function EditorPage() {
                     <tr>
                       <th>Description</th>
                       <th>Qté</th>
-                      <th>P.U. HT</th>
-                      <th>Total HT</th>
+                      <th>{priceMode === "ht" ? "P.U. HT" : "P.U. TTC"}</th>
+                      <th>{priceMode === "ht" ? "Total HT" : "Total TTC"}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -529,349 +594,519 @@ export default function EditorPage() {
                       <tr key={line.id}>
                         <td>{line.description}</td>
                         <td>{line.quantity}</td>
-                        <td>{formatCurrency(line.unitPrice)}</td>
-                        <td>{formatCurrency(line.quantity * line.unitPrice)}</td>
+                        <td>{formatCurrency(numberFromValue(line.unitPrice))}</td>
+                        <td>{formatCurrency(line.quantity * numberFromValue(line.unitPrice))}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
 
                 <div className={styles.totals}>
-                  <div className={styles.totalRow}><span>Sous-total HT</span><span>{formatCurrency(subtotal)}</span></div>
+                  <div className={styles.totalRow}><span>{hasTax ? "Sous-total HT" : "Sous-total"}</span><span>{formatCurrency(hasTax ? subtotalAfterDiscount : total)}</span></div>
                   {hasDiscount ? (
                     <div className={styles.totalRow}><span>Remise ({discountRate}%)</span><span>-{formatCurrency(discountAmount)}</span></div>
                   ) : null}
-                  <div className={styles.totalRow}><span>TVA {taxRate}%</span><span>{formatCurrency(taxAmount)}</span></div>
-                  <div className={styles.totalFinal}><span>Total TTC</span><span>{formatCurrency(total)}</span></div>
+                  {hasTax ? (
+                    <div className={styles.totalRow}><span>TVA {taxRate}%</span><span>{formatCurrency(taxAmount)}</span></div>
+                  ) : null}
+                  <div className={styles.totalFinal}><span>{hasTax ? "Total TTC" : "Total"}</span><span>{formatCurrency(total)}</span></div>
                 </div>
               </>
             )}
 
             <div className={styles.footer}>{footerNote}</div>
           </article>
-
-          <div className={`${styles.panel} ${styles.prestationsPanel}`}>
-            <div className={styles.sectionTitleRow}>
-              <div className={styles.panelTitle}>
-                {docType === "contrat"
-                  ? "Clauses du contrat"
-                  : docType === "avenant"
-                    ? "Contenu de l'avenant"
-                    : "Prestations"}
-              </div>
-              {isInvoiceFamily ? (
-                <button className="button button-secondary button-small" onClick={addLine} type="button">
-                  + Ligne
-                </button>
-              ) : null}
-            </div>
-
-            {docType === "contrat" ? (
-              <div className={styles.contractEditorStack}>
-                <label className={styles.field}>
-                  <span className={styles.label}>Objet</span>
-                  <textarea className={`${styles.input} ${styles.textarea}`} onChange={(event) => setContractObject(event.target.value)} onInput={autoResizeTextarea} value={contractObject} />
-                </label>
-                <label className={styles.field}>
-                  <span className={styles.label}>Périmètre</span>
-                  <textarea className={`${styles.input} ${styles.textarea}`} onChange={(event) => setContractScope(event.target.value)} onInput={autoResizeTextarea} value={contractScope} />
-                </label>
-                <label className={styles.field}>
-                  <span className={styles.label}>Conditions particulières</span>
-                  <textarea className={`${styles.input} ${styles.textarea}`} onChange={(event) => setContractTerms(event.target.value)} onInput={autoResizeTextarea} value={contractTerms} />
-                </label>
-              </div>
-            ) : docType === "avenant" ? (
-              <div className={styles.contractEditorStack}>
-                <label className={styles.field}>
-                  <span className={styles.label}>Document initial</span>
-                  <input className={styles.input} onChange={(event) => setAmendmentReference(event.target.value)} value={amendmentReference} />
-                </label>
-                <label className={styles.field}>
-                  <span className={styles.label}>Objet de l'avenant</span>
-                  <textarea className={`${styles.input} ${styles.textarea}`} onChange={(event) => setAmendmentObject(event.target.value)} onInput={autoResizeTextarea} value={amendmentObject} />
-                </label>
-                <label className={styles.field}>
-                  <span className={styles.label}>Modifications convenues</span>
-                  <textarea className={`${styles.input} ${styles.textarea}`} onChange={(event) => setAmendmentChanges(event.target.value)} onInput={autoResizeTextarea} value={amendmentChanges} />
-                </label>
-                <label className={styles.field}>
-                  <span className={styles.label}>Maintien des autres clauses</span>
-                  <textarea className={`${styles.input} ${styles.textarea}`} onChange={(event) => setAmendmentCarryOver(event.target.value)} onInput={autoResizeTextarea} value={amendmentCarryOver} />
-                </label>
-              </div>
-            ) : (
-              <div className={styles.lineStack}>
-                {lines.map((line, index) => (
-                  <div className={styles.lineCard} key={line.id}>
-                    <div className={styles.lineHeader}>
-                      <strong>Ligne {index + 1}</strong>
-                      <button className={styles.removeButton} onClick={() => removeLine(line.id)} type="button">
-                        Suppr.
-                      </button>
-                    </div>
-
-                    <label className={styles.field}>
-                      <span className={styles.label}>Description</span>
-                      <textarea
-                        className={`${styles.input} ${styles.textarea} ${styles.textareaCompact}`}
-                        onChange={(event) => updateLine(line.id, { description: event.target.value })}
-                        onInput={autoResizeTextarea}
-                        rows={2}
-                        value={line.description}
-                      />
-                    </label>
-
-                    <div className={styles.formRow}>
-                      <label className={styles.field}>
-                        <span className={styles.label}>Qté</span>
-                        <input
-                          className={styles.input}
-                          min="1"
-                          onChange={(event) => updateLine(line.id, { quantity: numberFromValue(event.target.value) })}
-                          type="number"
-                          value={line.quantity}
-                        />
-                      </label>
-                      <label className={styles.field}>
-                        <span className={styles.label}>P.U. HT</span>
-                        <input
-                          className={styles.input}
-                          min="0"
-                          onChange={(event) => updateLine(line.id, { unitPrice: numberFromValue(event.target.value) })}
-                          type="number"
-                          value={line.unitPrice}
-                        />
-                      </label>
-                    </div>
-
-                    <div className={styles.lineTotal}>Total ligne : {formatCurrency(line.quantity * line.unitPrice)}</div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
         </div>
 
         <aside className={styles.rightColumn}>
-          <div className={`${styles.panel} ${styles.typePanel}`}>
-            <div className={styles.panelTitle}>Type de document</div>
-            <div className={styles.typeRow}>
-              {docTypes.map((type) => (
-                <button
-                  className={`${styles.typeButton} ${docType === type.id ? styles.typeActive : ""}`}
-                  key={type.id}
-                  onClick={() => setDocType(type.id)}
-                  type="button"
-                >
-                  {type.label}
-                </button>
-              ))}
-            </div>
-            <p className={styles.panelNote}>{selectedType.note}</p>
-          </div>
-
-          <div className={`${styles.panel} ${styles.infoPanel}`}>
-            <div className={styles.panelTitle}>Informations</div>
-            <div className={styles.formRow}>
-              <label className={styles.field}>
-                <span className={styles.label}>Numéro</span>
-                <input className={styles.input} onChange={(event) => setNumber(event.target.value)} value={number} />
-              </label>
-              <label className={styles.field}>
-                <span className={styles.label}>Date</span>
-                <input className={styles.input} onChange={(event) => setIssueDate(event.target.value)} type="date" value={issueDate} />
-              </label>
+          <div className={`${styles.panel} ${styles.wizardPanel}`}>
+            <div className={styles.wizardHeader}>
+              <span className={styles.panelTitle}>Étape {stepIndex + 1}</span>
+              <strong className={styles.wizardTitle}>{currentStep.title}</strong>
+              <p className={styles.panelNote}>{currentStep.description}</p>
             </div>
 
-            <div className={styles.formRow}>
-              <label className={styles.field}>
-                <span className={styles.label}>
-                  {docType === "contrat"
-                    ? "Date de fin"
-                    : docType === "avenant"
-                      ? "Prise d'effet"
-                      : "Échéance"}
-                </span>
-                <input
-                  className={styles.input}
-                  onChange={(event) => setDueDate(event.target.value)}
-                  type="date"
-                  value={dueDate}
-                />
-              </label>
-              <label className={styles.field}>
-                <span className={styles.label}>
-                  {docType === "contrat"
-                    ? "Cadre / durée"
-                    : docType === "avenant"
-                      ? "Document initial"
-                      : "Conditions"}
-                </span>
-                <input
-                  className={styles.input}
-                  onChange={(event) => (docType === "avenant" ? setAmendmentReference(event.target.value) : setPaymentTerms(event.target.value))}
-                  value={docType === "avenant" ? amendmentReference : paymentTerms}
-                />
-              </label>
-            </div>
+            {currentStep.id === "type" ? (
+              <div className={styles.stepBody}>
+                <div className={styles.typeRow}>
+                  {docTypes.map((type) => {
+                    const locked = (type.id === "contrat" || type.id === "avenant") && !canUseLockedDocumentTypes(account);
 
-            <label className={styles.field}>
-              <span className={styles.label}>Destinataire</span>
-              <select
-                className={styles.input}
-                onChange={(event) => setRecipientMode(event.target.value as RecipientMode)}
-                value={recipientMode}
-              >
-                <option value="client">Client existant</option>
-                <option value="custom">Personne libre</option>
-              </select>
-            </label>
+                    return (
+                      <button
+                        className={`${styles.typeButton} ${docType === type.id ? styles.typeActive : ""} ${locked ? styles.typeLocked : ""}`}
+                        key={type.id}
+                        onClick={() => {
+                          if (locked) {
+                            openUpgradeModal("Type réservé à Pro", "Les contrats et avenants sont disponibles avec le plan Pro.");
+                            return;
+                          }
+                          setDocType(type.id);
+                        }}
+                        type="button"
+                      >
+                        {type.label}
+                        {locked ? <span className={styles.lockBadge}>Pro</span> : null}
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className={styles.panelNote}>{selectedType.note}</p>
+              </div>
+            ) : null}
 
-            {recipientMode === "client" ? (
-              <label className={styles.field}>
-                <span className={styles.label}>Client</span>
-                <select className={styles.input} onChange={(event) => handleSelectClient(event.target.value)} value={clientName}>
-                  {clientOptions.map((client) => (
-                    <option key={client} value={client}>
-                      {client}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            ) : (
-              <label className={styles.field}>
-                <span className={styles.label}>Nom de la personne</span>
-                <input
-                  className={styles.input}
-                  onChange={(event) => setCustomRecipientName(event.target.value)}
-                  value={customRecipientName}
-                />
-              </label>
-            )}
-
-            <label className={styles.field}>
-              <span className={styles.label}>{recipientMode === "client" ? "Coordonnées client" : "Coordonnées de la personne"}</span>
-              <textarea className={`${styles.input} ${styles.textarea}`} onChange={(event) => setClientMeta(event.target.value)} onInput={autoResizeTextarea} value={clientMeta} />
-            </label>
-          </div>
-
-          <div className={`${styles.panel} ${styles.identityPanel}`}>
-            <div className={styles.panelTitle}>Identité émetteur</div>
-            <label className={styles.field}>
-              <span className={styles.label}>Nom de l'entreprise</span>
-              <input className={styles.input} onChange={(event) => setCompanyName(event.target.value)} value={companyName} />
-            </label>
-            <label className={styles.field}>
-              <span className={styles.label}>Adresse</span>
-              <input className={styles.input} onChange={(event) => setCompanyAddress(event.target.value)} value={companyAddress} />
-            </label>
-            <label className={styles.field}>
-              <span className={styles.label}>Ligne légale</span>
-              <textarea className={`${styles.input} ${styles.textarea}`} onChange={(event) => setCompanyMeta(event.target.value)} onInput={autoResizeTextarea} value={companyMeta} />
-            </label>
-          </div>
-
-          <div className={`${styles.panel} ${styles.calculationsPanel}`}>
-            <div className={styles.panelTitle}>{isContractFamily ? "Validation & note" : "Calculs & note"}</div>
-            {isContractFamily ? (
-              <>
+            {currentStep.id === "recipient" ? (
+              <div className={styles.stepBody}>
                 <div className={styles.formRow}>
                   <label className={styles.field}>
-                    <span className={styles.label}>Signataire émetteur</span>
-                    <input className={styles.input} onChange={(event) => setCompanySignatory(event.target.value)} value={companySignatory} />
+                    <span className={styles.label}>Numéro</span>
+                    <input
+                      className={styles.input}
+                      onChange={(event) => {
+                        setHasManualNumberEdit(true);
+                        setNumber(event.target.value);
+                      }}
+                      value={number}
+                    />
                   </label>
                   <label className={styles.field}>
-                    <span className={styles.label}>Signataire client</span>
-                    <input className={styles.input} onChange={(event) => setClientSignatory(event.target.value)} value={clientSignatory} />
+                    <span className={styles.label}>Date</span>
+                    <input className={styles.input} onChange={(event) => setIssueDate(event.target.value)} type="date" value={issueDate} />
                   </label>
                 </div>
-                <label className={styles.field}>
-                  <span className={styles.label}>Note de bas de page</span>
-                  <textarea className={`${styles.input} ${styles.textarea}`} onChange={(event) => setFooterNote(event.target.value)} onInput={autoResizeTextarea} value={footerNote} />
-                </label>
-              </>
-            ) : (
-              <>
+
                 <div className={styles.formRow}>
                   <label className={styles.field}>
-                    <span className={styles.label}>Afficher une remise</span>
-                    <select
+                    <span className={styles.label}>
+                      {docType === "contrat"
+                        ? "Date de fin"
+                        : docType === "avenant"
+                          ? "Prise d'effet"
+                          : "Échéance"}
+                    </span>
+                    <input
                       className={styles.input}
-                      onChange={(event) => setHasDiscount(event.target.value === "oui")}
-                      value={hasDiscount ? "oui" : "non"}
+                      onChange={(event) => setDueDate(event.target.value)}
+                      type="date"
+                      value={dueDate}
+                    />
+                  </label>
+                  <label className={styles.field}>
+                    <span className={styles.label}>
+                      {docType === "contrat"
+                        ? "Cadre / durée"
+                        : docType === "avenant"
+                          ? "Document initial"
+                          : "Conditions"}
+                    </span>
+                    <input
+                      className={styles.input}
+                      onChange={(event) => (docType === "avenant" ? setAmendmentReference(event.target.value) : setPaymentTerms(event.target.value))}
+                      value={docType === "avenant" ? amendmentReference : paymentTerms}
+                    />
+                  </label>
+                </div>
+
+                <div className={styles.field}>
+                  <span className={styles.label}>Destinataire</span>
+                  <div className={styles.typeRow}>
+                    <button
+                      className={`${styles.typeButton} ${recipientMode === "client" ? styles.typeActive : ""}`}
+                      onClick={() => setRecipientMode("client")}
+                      type="button"
                     >
-                      <option value="non">Non</option>
-                      <option value="oui">Oui</option>
+                      Client
+                    </button>
+                    <button
+                      className={`${styles.typeButton} ${recipientMode === "custom" ? styles.typeActive : ""}`}
+                      onClick={() => setRecipientMode("custom")}
+                      type="button"
+                    >
+                      Nouveau client
+                    </button>
+                  </div>
+                </div>
+
+                {recipientMode === "client" ? (
+                  <label className={styles.field}>
+                    <span className={styles.label}>Client</span>
+                    <select className={styles.input} onChange={(event) => handleSelectClient(event.target.value)} value={clientName}>
+                      {clientOptions.map((client) => (
+                        <option key={client} value={client}>
+                          {client}
+                        </option>
+                      ))}
                     </select>
                   </label>
+                ) : (
                   <label className={styles.field}>
-                    <span className={styles.label}>TVA (%)</span>
-                    <input className={styles.input} onChange={(event) => setTaxRate(event.target.value)} value={taxRate} />
+                    <span className={styles.label}>Nom de la personne</span>
+                    <input
+                      className={styles.input}
+                      onChange={(event) => setCustomRecipientName(event.target.value)}
+                      value={customRecipientName}
+                    />
                   </label>
-                </div>
-                {hasDiscount ? (
-                  <label className={styles.field}>
-                    <span className={styles.label}>Remise (%)</span>
-                    <input className={styles.input} onChange={(event) => setDiscountRate(event.target.value)} value={discountRate} />
-                  </label>
-                ) : null}
+                )}
+
                 <label className={styles.field}>
-                  <span className={styles.label}>Note de bas de page</span>
-                  <textarea className={`${styles.input} ${styles.textarea}`} onChange={(event) => setFooterNote(event.target.value)} onInput={autoResizeTextarea} value={footerNote} />
+                  <span className={styles.label}>{recipientMode === "client" ? "Coordonnées client" : "Coordonnées de la personne"}</span>
+                  <textarea className={`${styles.input} ${styles.textarea}`} onChange={(event) => setClientMeta(event.target.value)} onInput={autoResizeTextarea} value={clientMeta} />
                 </label>
-              </>
-            )}
-          </div>
-
-          <div className={`${styles.panel} ${styles.customizationPanel}`}>
-            <div className={styles.panelTitle}>Personnalisation PDF</div>
-            <div className={styles.formRow}>
-              <label className={styles.field}>
-                <span className={styles.label}>Couleur fond</span>
-                <input
-                  className={`${styles.input} ${styles.colorInput}`}
-                  onChange={(event) => setPageBackground(event.target.value)}
-                  type="color"
-                  value={pageBackground}
-                />
-              </label>
-              <label className={styles.field}>
-                <span className={styles.label}>Couleur secondaire</span>
-                <input
-                  className={`${styles.input} ${styles.colorInput}`}
-                  onChange={(event) => setAccentColor(event.target.value)}
-                  type="color"
-                  value={accentColor}
-                />
-              </label>
-            </div>
-            <label className={styles.field}>
-              <span className={styles.label}>Couleur de la police</span>
-              <input
-                className={`${styles.input} ${styles.colorInput}`}
-                onChange={(event) => setTextColor(event.target.value)}
-                type="color"
-                value={textColor}
-              />
-            </label>
-          </div>
-
-          <div className={`${styles.panel} ${styles.actionsPanel}`}>
-            <div className={styles.actions}>
-              <div className={styles.formRow}>
-                <button className="button button-secondary" onClick={() => persistDocument("Brouillon")} type="button">Brouillon</button>
-                <button className="button button-primary" onClick={() => persistDocument("En attente")} type="button">Envoyer</button>
               </div>
-              <button className="button button-secondary" onClick={handleDownloadPdf} type="button">Télécharger PDF</button>
-              <div className={styles.quickLinks}>
-                <a className="button button-secondary button-small" href={recipientDocumentsHref}>
-                  Voir les documents
-                </a>
-                <a className="button button-secondary button-small" href={recipientClientHref}>
-                  Voir la fiche client
-                </a>
+            ) : null}
+
+            {currentStep.id === "issuer" ? (
+              <div className={styles.stepBody}>
+                <div className={styles.accountHint}>
+                  <div>
+                    <span className={styles.panelTitle}>Logo et identité</span>
+                    <p className={styles.panelNote}>
+                      Le logo et ces informations sont repris depuis <a href="/compte">Mon compte</a>.
+                    </p>
+                  </div>
+                  {companyLogoUrl ? <img alt="Logo entreprise" className={styles.accountLogoPreview} src={companyLogoUrl} /> : null}
+                </div>
+                <label className={styles.field}>
+                  <span className={styles.label}>Nom de l'entreprise</span>
+                  <input className={styles.input} onChange={(event) => setCompanyName(event.target.value)} value={companyName} />
+                </label>
+                <label className={styles.field}>
+                  <span className={styles.label}>Adresse</span>
+                  <input className={styles.input} onChange={(event) => setCompanyAddress(event.target.value)} value={companyAddress} />
+                </label>
+                <label className={styles.field}>
+                  <span className={styles.label}>Ligne légale</span>
+                  <textarea className={`${styles.input} ${styles.textarea}`} onChange={(event) => setCompanyMeta(event.target.value)} onInput={autoResizeTextarea} value={companyMeta} />
+                </label>
               </div>
+            ) : null}
+
+            {currentStep.id === "content" ? (
+              <div className={styles.stepBody}>
+                <div className={styles.sectionTitleRow}>
+                  <div className={styles.panelTitle}>
+                    {docType === "contrat"
+                      ? "Clauses du contrat"
+                      : docType === "avenant"
+                        ? "Contenu de l'avenant"
+                        : "Prestations"}
+                  </div>
+                  {isInvoiceFamily ? (
+                    <button className="button button-secondary button-small" onClick={addLine} type="button">
+                      + Ligne
+                    </button>
+                  ) : null}
+                </div>
+
+                {docType === "contrat" ? (
+                  <div className={styles.contractEditorStack}>
+                    <label className={styles.field}>
+                      <span className={styles.label}>Objet</span>
+                      <textarea className={`${styles.input} ${styles.textarea}`} onChange={(event) => setContractObject(event.target.value)} onInput={autoResizeTextarea} value={contractObject} />
+                    </label>
+                    <label className={styles.field}>
+                      <span className={styles.label}>Périmètre</span>
+                      <textarea className={`${styles.input} ${styles.textarea}`} onChange={(event) => setContractScope(event.target.value)} onInput={autoResizeTextarea} value={contractScope} />
+                    </label>
+                    <label className={styles.field}>
+                      <span className={styles.label}>Conditions particulières</span>
+                      <textarea className={`${styles.input} ${styles.textarea}`} onChange={(event) => setContractTerms(event.target.value)} onInput={autoResizeTextarea} value={contractTerms} />
+                    </label>
+                  </div>
+                ) : docType === "avenant" ? (
+                  <div className={styles.contractEditorStack}>
+                    <label className={styles.field}>
+                      <span className={styles.label}>Document initial</span>
+                      <input className={styles.input} onChange={(event) => setAmendmentReference(event.target.value)} value={amendmentReference} />
+                    </label>
+                    <label className={styles.field}>
+                      <span className={styles.label}>Objet de l'avenant</span>
+                      <textarea className={`${styles.input} ${styles.textarea}`} onChange={(event) => setAmendmentObject(event.target.value)} onInput={autoResizeTextarea} value={amendmentObject} />
+                    </label>
+                    <label className={styles.field}>
+                      <span className={styles.label}>Modifications convenues</span>
+                      <textarea className={`${styles.input} ${styles.textarea}`} onChange={(event) => setAmendmentChanges(event.target.value)} onInput={autoResizeTextarea} value={amendmentChanges} />
+                    </label>
+                    <label className={styles.field}>
+                      <span className={styles.label}>Maintien des autres clauses</span>
+                      <textarea className={`${styles.input} ${styles.textarea}`} onChange={(event) => setAmendmentCarryOver(event.target.value)} onInput={autoResizeTextarea} value={amendmentCarryOver} />
+                    </label>
+                  </div>
+                ) : (
+                  <>
+                    <div className={styles.lineStack}>
+                      {lines.map((line, index) => (
+                        <div className={styles.lineCard} key={line.id}>
+                          <div className={styles.lineHeader}>
+                            <strong>Ligne {index + 1}</strong>
+                            <button className={styles.removeButton} onClick={() => removeLine(line.id)} type="button">
+                              Suppr.
+                            </button>
+                          </div>
+
+                          <label className={styles.field}>
+                            <span className={styles.label}>Description</span>
+                            <textarea
+                              className={`${styles.input} ${styles.textarea} ${styles.textareaCompact}`}
+                              onChange={(event) => updateLine(line.id, { description: event.target.value })}
+                              onInput={autoResizeTextarea}
+                              rows={2}
+                              value={line.description}
+                            />
+                          </label>
+
+                          <div className={styles.formRow}>
+                            <label className={styles.field}>
+                              <span className={styles.label}>Qté</span>
+                              <input
+                                className={styles.input}
+                                min="1"
+                                onChange={(event) => updateLine(line.id, { quantity: numberFromValue(event.target.value) })}
+                                type="number"
+                                value={line.quantity}
+                              />
+                            </label>
+                            <label className={styles.field}>
+                              <span className={styles.label}>{priceMode === "ht" ? "P.U. HT" : "P.U. TTC"}</span>
+                              <input
+                                className={styles.input}
+                                inputMode="decimal"
+                                onChange={(event) => updateLine(line.id, { unitPrice: event.target.value })}
+                                type="text"
+                                value={line.unitPrice}
+                              />
+                            </label>
+                          </div>
+
+                          <div className={styles.lineTotal}>Total ligne : {formatCurrency(line.quantity * numberFromValue(line.unitPrice))}</div>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className={styles.calcSection}>
+                      <div className={styles.sectionTitleRow}>
+                        <div className={styles.panelTitle}>Calcul et note</div>
+                      </div>
+
+                      <div className={styles.calcSimpleGrid}>
+                        <label className={styles.field}>
+                          <span className={styles.label}>Prix saisis en</span>
+                          <select
+                            className={styles.input}
+                            onChange={(event) => setPriceMode(event.target.value as "ht" | "ttc")}
+                            value={priceMode}
+                          >
+                            <option value="ht">HT</option>
+                            <option value="ttc">TTC</option>
+                          </select>
+                        </label>
+
+                        <label className={styles.field}>
+                          <span className={styles.label}>TVA</span>
+                          <select
+                            className={styles.input}
+                            onChange={(event) => setHasTax(event.target.value === "oui")}
+                            value={hasTax ? "oui" : "non"}
+                          >
+                            <option value="non">Non</option>
+                            <option value="oui">Oui</option>
+                          </select>
+                        </label>
+                      </div>
+
+                      {hasTax ? (
+                        <label className={styles.field}>
+                          <span className={styles.label}>Taux de TVA (%)</span>
+                          <input
+                            className={styles.input}
+                            inputMode="decimal"
+                            onChange={(event) => setTaxRate(event.target.value)}
+                            type="text"
+                            value={taxRate}
+                          />
+                        </label>
+                      ) : null}
+
+                      <div className={styles.calcSimpleGrid}>
+                        <label className={styles.field}>
+                          <span className={styles.label}>Remise</span>
+                          <select
+                            className={styles.input}
+                            onChange={(event) => setHasDiscount(event.target.value === "oui")}
+                            value={hasDiscount ? "oui" : "non"}
+                          >
+                            <option value="non">Non</option>
+                            <option value="oui">Oui</option>
+                          </select>
+                        </label>
+
+                        {hasDiscount ? (
+                          <label className={styles.field}>
+                            <span className={styles.label}>Taux de remise (%)</span>
+                            <input
+                              className={styles.input}
+                              inputMode="decimal"
+                              onChange={(event) => setDiscountRate(event.target.value)}
+                              type="text"
+                              value={discountRate}
+                            />
+                          </label>
+                        ) : (
+                          <div className={styles.field} />
+                        )}
+                      </div>
+
+                      <div className={styles.calcSummary}>
+                        <div className={styles.calcSummaryHead}>
+                          <strong>Récapitulatif</strong>
+                          <span>{summaryPriceModeLabel}</span>
+                        </div>
+                        <div className={styles.calcSummaryRow}>
+                          <span>{summaryTaxLabel}</span>
+                          <span>{hasTax ? "Sous-total HT puis Total TTC" : "Total simple sans TVA"}</span>
+                        </div>
+                        <div className={styles.calcSummaryRow}>
+                          <span>{summaryDiscountLabel}</span>
+                          <span>{formatCurrency(total)}</span>
+                        </div>
+                      </div>
+
+                      <label className={styles.field}>
+                        <span className={styles.label}>Note de bas de page</span>
+                        <textarea className={`${styles.input} ${styles.textarea}`} onChange={(event) => setFooterNote(event.target.value)} onInput={autoResizeTextarea} value={footerNote} />
+                      </label>
+                    </div>
+                  </>
+                )}
+              </div>
+            ) : null}
+
+            {currentStep.id === "finalize" ? (
+              <div className={styles.stepBody}>
+                <div className={styles.finalizeStack}>
+                  <div>
+                    <div className={styles.panelTitle}>{isContractFamily ? "Validation & note" : "Vérification finale"}</div>
+                    {isContractFamily ? (
+                      <>
+                        <div className={styles.formRow}>
+                          <label className={styles.field}>
+                            <span className={styles.label}>Signataire émetteur</span>
+                            <input className={styles.input} onChange={(event) => setCompanySignatory(event.target.value)} value={companySignatory} />
+                          </label>
+                          <label className={styles.field}>
+                            <span className={styles.label}>Signataire client</span>
+                            <input className={styles.input} onChange={(event) => setClientSignatory(event.target.value)} value={clientSignatory} />
+                          </label>
+                        </div>
+                        <label className={styles.field}>
+                          <span className={styles.label}>Note de bas de page</span>
+                          <textarea className={`${styles.input} ${styles.textarea}`} onChange={(event) => setFooterNote(event.target.value)} onInput={autoResizeTextarea} value={footerNote} />
+                        </label>
+                      </>
+                    ) : (
+                      <div className={styles.finalReview}>
+                        <div className={styles.calcSummary}>
+                          <div className={styles.calcSummaryHead}>
+                            <strong>Mode de calcul</strong>
+                            <span>{summaryPriceModeLabel}</span>
+                          </div>
+                          <div className={styles.calcSummaryRow}>
+                            <span>Sous-total</span>
+                            <span>{hasTax ? "HT" : "Simple"}</span>
+                          </div>
+                          <div className={styles.calcSummaryRow}>
+                            <span>TVA</span>
+                            <span>{hasTax ? `${taxRate || "0"} %` : "Non"}</span>
+                          </div>
+                          <div className={styles.calcSummaryRow}>
+                            <span>Remise</span>
+                            <span>{hasDiscount ? `${discountRate || "0"} %` : "Non"}</span>
+                          </div>
+                          <div className={styles.calcSummaryRow}>
+                            <span>Total final</span>
+                            <span>{formatCurrency(total)}</span>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  <div>
+                    <div className={styles.panelTitle}>Personnalisation PDF</div>
+                    <div className={styles.formRow}>
+                      <label className={styles.field}>
+                        <span className={styles.label}>Couleur d’accent</span>
+                        <input
+                          className={`${styles.input} ${styles.colorInput}`}
+                          onChange={(event) => setAccentColor(event.target.value)}
+                          type="color"
+                          value={accentColor}
+                        />
+                      </label>
+                      <label className={styles.field}>
+                        <span className={styles.label}>Couleur du texte principal</span>
+                        <input
+                          className={`${styles.input} ${styles.colorInput}`}
+                          onChange={(event) => setTextColor(event.target.value)}
+                          type="color"
+                          value={textColor}
+                        />
+                      </label>
+                    </div>
+                    <label className={styles.field}>
+                      <span className={styles.label}>Couleur du texte secondaire</span>
+                      <input
+                        className={`${styles.input} ${styles.colorInput}`}
+                        onChange={(event) => setSecondaryTextColor(event.target.value)}
+                        type="color"
+                        value={secondaryTextColor}
+                      />
+                    </label>
+                    <label className={styles.field}>
+                      <span className={styles.label}>Couleur de fond</span>
+                      <input
+                        className={`${styles.input} ${styles.colorInput}`}
+                        onChange={(event) => setPageBackground(event.target.value)}
+                        type="color"
+                        value={pageBackground}
+                      />
+                    </label>
+                  </div>
+
+                  <div className={styles.actions}>
+                    <button
+                      className="button button-secondary"
+                      onClick={() => {
+                        const savedId = persistDocument("Brouillon");
+                        if (savedId) {
+                          window.location.href = `/documents?doc=${encodeURIComponent(savedId)}`;
+                        }
+                      }}
+                      type="button"
+                    >
+                      Brouillon
+                    </button>
+                    <button className="button button-primary" onClick={handleDownloadPdf} type="button">Télécharger PDF</button>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
+            <div className={styles.wizardActions}>
+              <button
+                className="button button-secondary"
+                disabled={stepIndex === 0}
+                onClick={goToPreviousStep}
+                type="button"
+              >
+                Précédent
+              </button>
+              {stepIndex < editorSteps.length - 1 ? (
+                <button className="button button-primary" onClick={goToNextStep} type="button">
+                  Suivant
+                </button>
+              ) : null}
             </div>
           </div>
         </aside>

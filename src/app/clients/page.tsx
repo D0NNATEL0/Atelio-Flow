@@ -1,10 +1,17 @@
 "use client";
 
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { canCreateClient, canCreateDocument, defaultAccount, loadAccount, type StoredAccount } from "@/lib/account-store";
+import { downloadDocumentAsPdf } from "@/lib/pdf-export";
 import {
+  clearPendingExternalDocument,
+  createDocumentEntry,
   defaultClients,
   defaultDocuments,
+  guessDocumentTypeFromFileName,
+  getNextDocumentNumber,
   hydrateClients,
+  loadPendingExternalDocument,
   loadClients,
   loadDocuments,
   saveClients,
@@ -15,16 +22,13 @@ import {
 import styles from "./page.module.css";
 
 type ClientRow = StoredClient;
+const tierFilters = ["Tous", "Compte clé", "Actif", "À développer"] as const;
+const creationFilters = ["Toutes", "7 derniers jours", "30 derniers jours", "3 derniers mois", "12 derniers mois"] as const;
+const kindFilters = ["Tous", "Pro", "Particulier"] as const;
 
-function getClientTier(docs: number) {
-  if (docs >= 10) return "Compte clé";
-  if (docs >= 5) return "Actif";
-  return "À développer";
-}
-
-function getTierClass(docs: number) {
-  if (docs >= 10) return "status-cyan";
-  if (docs >= 5) return "status-success";
+function getTierClass(status: string) {
+  if (status === "Compte clé") return "status-cyan";
+  if (status === "Actif") return "status-success";
   return "status-warning";
 }
 
@@ -34,8 +38,30 @@ function getDocumentTypeClass(type: string) {
   return "status-cyan";
 }
 
+function isWithinCreationWindow(createdAt: string, filter: (typeof creationFilters)[number]) {
+  if (filter === "Toutes") return true;
+
+  const createdDate = new Date(createdAt);
+  if (Number.isNaN(createdDate.getTime())) return false;
+
+  const now = new Date("2026-04-02T12:00:00");
+  const diffInDays = Math.floor((now.getTime() - createdDate.getTime()) / (1000 * 60 * 60 * 24));
+
+  if (filter === "7 derniers jours") return diffInDays <= 7;
+  if (filter === "30 derniers jours") return diffInDays <= 30;
+  if (filter === "3 derniers mois") return diffInDays <= 90;
+  return diffInDays <= 365;
+}
+
 export default function ClientsPage() {
+  const [account, setAccount] = useState<StoredAccount>(defaultAccount());
   const [query, setQuery] = useState("");
+  const [isFilterOpen, setIsFilterOpen] = useState(false);
+  const [selectedClients, setSelectedClients] = useState<string[]>([]);
+  const [bulkAction, setBulkAction] = useState<"" | "export" | "delete">("");
+  const [tierFilter, setTierFilter] = useState<(typeof tierFilters)[number]>("Tous");
+  const [creationFilter, setCreationFilter] = useState<(typeof creationFilters)[number]>("Toutes");
+  const [kindFilter, setKindFilter] = useState<(typeof kindFilters)[number]>("Tous");
   const [selectedName, setSelectedName] = useState<string | null>(null);
   const [displayedName, setDisplayedName] = useState<string | null>(null);
   const [isCreateOpen, setIsCreateOpen] = useState(false);
@@ -45,31 +71,64 @@ export default function ClientsPage() {
     name: "",
     contactEmail: "",
     phone: "",
-    coordinates: ""
+    coordinates: "",
+    kind: "pro" as StoredClient["kind"]
   });
+  const [upgradeModal, setUpgradeModal] = useState<{ title: string; text: string } | null>(null);
+  const [pendingExternalDocument, setPendingExternalDocument] = useState<ReturnType<typeof loadPendingExternalDocument>>(null);
+  const [documentChoiceClient, setDocumentChoiceClient] = useState<ClientRow | null>(null);
+  const [pendingUploadClient, setPendingUploadClient] = useState<ClientRow | null>(null);
+  const uploadInputRef = useRef<HTMLInputElement | null>(null);
 
   const filteredClients = useMemo(() => {
     const normalized = query.trim().toLowerCase();
-    if (!normalized) return clients;
-
-    return clients.filter(
-      (client) =>
+    return clients.filter((client) => {
+      const matchesQuery =
+        !normalized ||
         client.name.toLowerCase().includes(normalized) ||
         client.contactEmail.toLowerCase().includes(normalized) ||
-        client.initials.toLowerCase().includes(normalized)
-    );
-  }, [clients, query]);
+        client.initials.toLowerCase().includes(normalized);
+      const matchesTier = tierFilter === "Tous" || client.relationshipStatus === tierFilter;
+      const matchesCreation = isWithinCreationWindow(client.createdAt, creationFilter);
+      const matchesKind =
+        kindFilter === "Tous" ||
+        (kindFilter === "Pro" && client.kind === "pro") ||
+        (kindFilter === "Particulier" && client.kind === "particulier");
+
+      return matchesQuery && matchesTier && matchesCreation && matchesKind;
+    });
+  }, [clients, query, tierFilter, creationFilter, kindFilter]);
+
+  const activeFilterCount = [tierFilter !== "Tous", creationFilter !== "Toutes", kindFilter !== "Tous"].filter(Boolean)
+    .length;
 
   useEffect(() => {
     const storedDocuments = loadDocuments();
     const storedClients = hydrateClients(loadClients(), storedDocuments);
+    const pendingDocument = loadPendingExternalDocument();
+    setAccount(loadAccount());
     setDocuments(storedDocuments);
     setClients(storedClients);
+    setPendingExternalDocument(pendingDocument);
+  }, []);
+
+  useEffect(() => {
+    function syncAccount() {
+      setAccount(loadAccount());
+    }
+
+    window.addEventListener("atelio-account-updated", syncAccount);
+    return () => window.removeEventListener("atelio-account-updated", syncAccount);
   }, []);
 
   useEffect(() => {
     if (typeof window === "undefined" || !clients.length) return;
-    const requestedClient = new URLSearchParams(window.location.search).get("client");
+    const params = new URLSearchParams(window.location.search);
+    const requestedClient = params.get("client");
+    const shouldOpenCreate = params.get("create") === "1";
+    if (shouldOpenCreate) {
+      setIsCreateOpen(true);
+    }
     if (!requestedClient) return;
     if (!clients.some((client) => client.name === requestedClient)) return;
     setSelectedName(requestedClient);
@@ -95,270 +154,14 @@ export default function ClientsPage() {
     }
   }, [filteredClients, selectedName]);
 
+  useEffect(() => {
+    setSelectedClients((current) => current.filter((name) => clients.some((client) => client.name === name)));
+  }, [clients]);
+
   const selectedClient = displayedName ? clients.find((client) => client.name === displayedName) ?? null : null;
-
-  function handleDownloadDocument(row: StoredDocument, client: ClientRow) {
-    const printWindow = window.open("", "_blank", "noopener,noreferrer,width=960,height=1200");
-    if (!printWindow) return;
-
-    const isContractFamily = row.type === "Contrat" || row.type === "Avenant";
-    const title = `${row.type} ${row.id}`;
-
-    printWindow.document.write(`
-      <!doctype html>
-      <html lang="fr">
-        <head>
-          <meta charset="utf-8" />
-          <meta name="viewport" content="width=device-width, initial-scale=1" />
-          <title>${title}</title>
-          <style>
-            body {
-              margin: 0;
-              padding: 32px;
-              font-family: Arial, sans-serif;
-              background: #f7f2ea;
-              color: #241f1a;
-            }
-            .page {
-              max-width: 820px;
-              margin: 0 auto;
-              background: #ffffff;
-              border-radius: 24px;
-              padding: 40px;
-              box-shadow: 0 18px 60px rgba(0,0,0,0.08);
-            }
-            .head {
-              display: flex;
-              justify-content: space-between;
-              gap: 24px;
-              align-items: flex-start;
-              margin-bottom: 28px;
-            }
-            .brand {
-              font-size: 28px;
-              font-weight: 800;
-              color: #e48b2f;
-              margin-bottom: 10px;
-            }
-            .muted {
-              color: #6f665c;
-              line-height: 1.55;
-            }
-            .badge {
-              display: inline-flex;
-              padding: 10px 16px;
-              border-radius: 999px;
-              background: #fff2e6;
-              color: #d97613;
-              font-weight: 700;
-            }
-            .meta {
-              display: grid;
-              grid-template-columns: repeat(3, minmax(0, 1fr));
-              gap: 0;
-              overflow: hidden;
-              border: 1px solid #eee3d8;
-              border-radius: 18px;
-              margin-bottom: 28px;
-            }
-            .meta > div {
-              padding: 18px;
-              border-right: 1px solid #eee3d8;
-            }
-            .meta > div:last-child {
-              border-right: none;
-            }
-            .label {
-              display: block;
-              font-size: 12px;
-              font-weight: 700;
-              text-transform: uppercase;
-              letter-spacing: .08em;
-              color: #85796f;
-              margin-bottom: 6px;
-            }
-            .value {
-              font-size: 16px;
-              font-weight: 700;
-            }
-            .parties {
-              display: grid;
-              grid-template-columns: repeat(2, minmax(0, 1fr));
-              gap: 24px;
-              margin-bottom: 28px;
-            }
-            .sectionTitle {
-              font-size: 12px;
-              font-weight: 700;
-              text-transform: uppercase;
-              letter-spacing: .08em;
-              color: #85796f;
-              margin-bottom: 8px;
-            }
-            .partyName {
-              font-size: 24px;
-              font-weight: 800;
-              margin-bottom: 8px;
-            }
-            .table {
-              width: 100%;
-              border-collapse: collapse;
-              margin-bottom: 28px;
-            }
-            .table th {
-              text-align: left;
-              padding: 14px 18px;
-              background: #e48b2f;
-              color: white;
-              font-size: 14px;
-            }
-            .table td {
-              padding: 16px 18px;
-              border-bottom: 1px solid #eee3d8;
-            }
-            .totals {
-              width: 320px;
-              margin-left: auto;
-              display: grid;
-              gap: 8px;
-            }
-            .totalsRow {
-              display: flex;
-              justify-content: space-between;
-              gap: 16px;
-            }
-            .totalFinal {
-              display: flex;
-              justify-content: space-between;
-              gap: 16px;
-              padding: 14px 18px;
-              border-radius: 16px;
-              background: #e48b2f;
-              color: white;
-              font-weight: 800;
-            }
-            .contractBlock {
-              display: grid;
-              gap: 20px;
-            }
-            .contractCard {
-              padding: 18px 20px;
-              border: 1px solid #eee3d8;
-              border-radius: 18px;
-              background: #fffdfa;
-            }
-            .footer {
-              margin-top: 28px;
-              padding-top: 18px;
-              border-top: 1px solid #eee3d8;
-              color: #85796f;
-            }
-            @media print {
-              body {
-                background: white;
-                padding: 0;
-              }
-              .page {
-                box-shadow: none;
-                border-radius: 0;
-              }
-            }
-          </style>
-        </head>
-        <body>
-          <main class="page">
-            <div class="head">
-              <div>
-                <div class="brand">Atelio Studio</div>
-                <div class="muted">123 rue de la Paix<br />75001 Paris · SIRET 123 456 789 00012</div>
-              </div>
-              <div>
-                <div class="badge">${row.type}</div>
-                <div class="muted" style="margin-top:12px">${row.id}</div>
-              </div>
-            </div>
-
-            <div class="meta">
-              <div>
-                <span class="label">Date</span>
-                <span class="value">${row.date}</span>
-              </div>
-              <div>
-                <span class="label">${isContractFamily ? "Date de fin" : "Échéance"}</span>
-                <span class="value">${row.due}</span>
-              </div>
-              <div>
-                <span class="label">Statut</span>
-                <span class="value">${row.status}</span>
-              </div>
-            </div>
-
-            <div class="parties">
-              <div>
-                <div class="sectionTitle">Émetteur</div>
-                <div class="partyName">Atelio Studio</div>
-                <div class="muted">123 rue de la Paix<br />75001 Paris<br />contact@atelio.fr</div>
-              </div>
-              <div>
-                <div class="sectionTitle">Client</div>
-                <div class="partyName">${client.name}</div>
-                <div class="muted">${client.email}</div>
-              </div>
-            </div>
-
-            ${
-              isContractFamily
-                ? `
-                  <div class="contractBlock">
-                    <div class="contractCard">
-                      <div class="sectionTitle">Objet</div>
-                      <div class="muted">Document contractuel lié à la collaboration en cours avec ${client.name}.</div>
-                    </div>
-                    <div class="contractCard">
-                      <div class="sectionTitle">Cadre</div>
-                      <div class="muted">Les modalités commerciales, livrables et échéances sont confirmés selon le document ${row.id}.</div>
-                    </div>
-                  </div>
-                `
-                : `
-                  <table class="table">
-                    <thead>
-                      <tr>
-                        <th>Description</th>
-                        <th>Qté</th>
-                        <th>P.U. HT</th>
-                        <th>Total HT</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <tr>
-                        <td>Prestation principale</td>
-                        <td>1</td>
-                        <td>${row.amount}</td>
-                        <td>${row.amount}</td>
-                      </tr>
-                    </tbody>
-                  </table>
-                  <div class="totals">
-                    <div class="totalsRow"><span>Sous-total HT</span><strong>${row.amount}</strong></div>
-                    <div class="totalsRow"><span>TVA</span><strong>Incluse selon configuration</strong></div>
-                    <div class="totalFinal"><span>Total TTC</span><span>${row.amount}</span></div>
-                  </div>
-                `
-            }
-
-            <div class="footer">Document regénéré depuis la fiche client Atelio.</div>
-          </main>
-          <script>
-            window.onload = () => {
-              window.print();
-            };
-          </script>
-        </body>
-      </html>
-    `);
-    printWindow.document.close();
-  }
+  const visibleClientNames = filteredClients.map((client) => client.name);
+  const allVisibleSelected = visibleClientNames.length > 0 && visibleClientNames.every((name) => selectedClients.includes(name));
+  const someVisibleSelected = visibleClientNames.some((name) => selectedClients.includes(name));
 
   function updateClient(name: string, patch: Partial<(typeof clients)[number]>) {
     setClients((current) => current.map((client) => (client.name === name ? { ...client, ...patch } : client)));
@@ -367,33 +170,17 @@ export default function ClientsPage() {
   function handleExternalDocumentUpload(client: ClientRow, file: File | null) {
     if (!file) return;
 
-    const guessedType =
-      file.name.toLowerCase().includes("facture")
-        ? "Facture"
-        : file.name.toLowerCase().includes("devis")
-          ? "Devis"
-          : file.name.toLowerCase().includes("avenant")
-            ? "Avenant"
-            : "Contrat";
-    const prefix =
-      guessedType === "Facture"
-        ? "FAC"
-        : guessedType === "Devis"
-          ? "DEV"
-          : guessedType === "Avenant"
-            ? "AVE"
-            : "CTR";
-    const today = new Date().toISOString().slice(0, 10);
+    if (!canCreateDocument(account, documents.length)) {
+      setUpgradeModal({
+        title: "Limite de documents atteinte",
+        text: "Le plan Gratuit permet jusqu’à 10 documents. Passe à Pro pour rattacher plus de fichiers à tes clients."
+      });
+      return;
+    }
 
-    const nextDocument = {
-      id: `${prefix}-EXT-${Date.now().toString().slice(-6)}`,
-      client: client.name,
-      date: today,
-      due: "—",
-      amount: "0,00 €",
-      status: "Brouillon",
-      type: guessedType
-    };
+    const guessedType = guessDocumentTypeFromFileName(file.name);
+    const today = new Date().toISOString().slice(0, 10);
+    const nextDocument = createDocumentEntry(loadDocuments(), guessedType, client.name, today);
 
     const currentDocuments = loadDocuments();
     const nextDocuments = [nextDocument, ...currentDocuments];
@@ -413,11 +200,36 @@ export default function ClientsPage() {
         nextDocuments
       )
     );
+
+    setDocumentChoiceClient(null);
+    setPendingUploadClient(null);
+  }
+
+  function openDocumentChoice(client: ClientRow) {
+    setDocumentChoiceClient(client);
+  }
+
+  function startNewDocument(client: ClientRow) {
+    window.location.href = `/editor?client=${encodeURIComponent(client.name)}`;
+  }
+
+  function startExternalUpload(client: ClientRow) {
+    setPendingUploadClient(client);
+    setDocumentChoiceClient(null);
+    window.setTimeout(() => uploadInputRef.current?.click(), 0);
   }
 
   function createClient() {
     const name = newClient.name.trim();
     if (!name) return;
+
+    if (!canCreateClient(account, clients.length)) {
+      setUpgradeModal({
+        title: "Limite de clients atteinte",
+        text: "Le plan Gratuit permet jusqu’à 5 clients. Passe à Pro pour continuer à enrichir ton portefeuille."
+      });
+      return;
+    }
 
     const initials = name
       .split(" ")
@@ -427,38 +239,282 @@ export default function ClientsPage() {
       .join("") || "CL";
 
     const accents = ["violet", "coral", "cyan", "green", "amber", "pink"] as const;
-    const createdClient = {
+    const createdClient: StoredClient = {
       name,
       email: newClient.contactEmail.trim() || "contact@client.fr",
       contactEmail: newClient.contactEmail.trim() || "contact@client.fr",
       phone: newClient.phone.trim() || "À compléter",
       coordinates: newClient.coordinates.trim() || "Coordonnées à compléter",
+      createdAt: new Date().toISOString().slice(0, 10),
+      kind: newClient.kind,
+      relationshipStatus: "À développer",
       initials,
       total: "0 €",
       docs: 0,
       accent: accents[clients.length % accents.length]
     };
+    const baseClients = [createdClient, ...clients];
+    let nextDocuments = documents;
 
-    setClients((current) => [createdClient, ...current]);
+    if (pendingExternalDocument) {
+      const linkedDocument = createDocumentEntry(
+        documents,
+        pendingExternalDocument.guessedType || guessDocumentTypeFromFileName(pendingExternalDocument.fileName),
+        createdClient.name,
+        pendingExternalDocument.createdAt || new Date().toISOString().slice(0, 10)
+      );
+      nextDocuments = [linkedDocument, ...documents];
+      saveDocuments(nextDocuments);
+      setDocuments(nextDocuments);
+      clearPendingExternalDocument();
+      setPendingExternalDocument(null);
+    }
+
+    const hydratedClients = hydrateClients(baseClients, nextDocuments);
+    setClients(hydratedClients);
     setSelectedName(createdClient.name);
     setIsCreateOpen(false);
-    setNewClient({ name: "", contactEmail: "", phone: "", coordinates: "" });
+    setNewClient({ name: "", contactEmail: "", phone: "", coordinates: "", kind: "pro" });
+  }
+
+  function toggleClientSelection(name: string) {
+    setSelectedClients((current) => (current.includes(name) ? current.filter((item) => item !== name) : [...current, name]));
+  }
+
+  function toggleSelectAllVisible() {
+    setSelectedClients((current) => {
+      if (allVisibleSelected) {
+        return current.filter((name) => !visibleClientNames.includes(name));
+      }
+
+      const next = new Set(current);
+      visibleClientNames.forEach((name) => next.add(name));
+      return Array.from(next);
+    });
+  }
+
+  function exportSelectedClients() {
+    const rows = clients.filter((client) => selectedClients.includes(client.name));
+    if (!rows.length) return;
+
+    const csv = [
+      ["Nom", "Type", "Email", "Téléphone", "Créé le", "Documents", "CA", "Coordonnées"].join(";"),
+      ...rows.map((client) =>
+        [
+          client.name,
+          client.kind === "pro" ? "Professionnel" : "Particulier",
+          client.contactEmail,
+          client.phone,
+          client.createdAt,
+          String(client.docs),
+          client.total,
+          client.coordinates.replace(/\n/g, " ")
+        ]
+          .map((value) => `"${String(value).replace(/"/g, '""')}"`)
+          .join(";")
+      )
+    ].join("\n");
+
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `clients-atelio-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  function deleteSelectedClients() {
+    if (!selectedClients.length) return;
+
+    const selectedSet = new Set(selectedClients);
+    const nextClients = clients.filter((client) => !selectedSet.has(client.name));
+    const nextDocuments = documents.filter((document) => !selectedSet.has(document.client));
+
+    setClients(nextClients);
+    setDocuments(nextDocuments);
+    saveDocuments(nextDocuments);
+
+    if (selectedName && selectedSet.has(selectedName)) {
+      setSelectedName(null);
+    }
+
+    setSelectedClients([]);
+  }
+
+  function runBulkAction() {
+    if (!selectedClients.length || !bulkAction) return;
+
+    if (bulkAction === "export") {
+      exportSelectedClients();
+      setBulkAction("");
+      return;
+    }
+
+    if (window.confirm(`Supprimer ${selectedClients.length} client(s) sélectionné(s) et leurs documents liés ?`)) {
+      deleteSelectedClients();
+    }
+    setBulkAction("");
   }
 
   return (
     <div className={styles.page}>
+      {isFilterOpen ? (
+        <>
+          <div className={styles.filterOverlay} onClick={() => setIsFilterOpen(false)} />
+          <aside className={styles.filterDrawer}>
+            <div className={styles.filterHead}>
+              <div>
+                <span className={styles.blockLabel}>Filtres</span>
+                <strong className={styles.blockTitle}>Filtrer les résultats</strong>
+              </div>
+              <button className={styles.filterClose} onClick={() => setIsFilterOpen(false)} type="button">
+                ✕
+              </button>
+            </div>
+
+            <div className={styles.filterSection}>
+              <span className={styles.detailLabel}>Niveau de relation</span>
+              <div className={styles.filterOptionList}>
+                {tierFilters.map((item) => (
+                  <label className={styles.filterOption} key={item}>
+                    <input
+                      checked={tierFilter === item}
+                      name="tier-filter"
+                      onChange={() => setTierFilter(item)}
+                      type="radio"
+                    />
+                    <span>{item}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            <div className={styles.filterSection}>
+              <span className={styles.detailLabel}>Date de création</span>
+              <div className={styles.filterOptionList}>
+                {creationFilters.map((item) => (
+                  <label className={styles.filterOption} key={item}>
+                    <input
+                      checked={creationFilter === item}
+                      name="creation-filter"
+                      onChange={() => setCreationFilter(item)}
+                      type="radio"
+                    />
+                    <span>{item}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            <div className={styles.filterSection}>
+              <span className={styles.detailLabel}>Type de client</span>
+              <div className={styles.filterOptionList}>
+                {kindFilters.map((item) => (
+                  <label className={styles.filterOption} key={item}>
+                    <input
+                      checked={kindFilter === item}
+                      name="kind-filter"
+                      onChange={() => setKindFilter(item)}
+                      type="radio"
+                    />
+                    <span>{item}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            <div className={styles.filterActions}>
+              <button
+                className="button button-secondary"
+                onClick={() => {
+                  setTierFilter("Tous");
+                  setCreationFilter("Toutes");
+                  setKindFilter("Tous");
+                }}
+                type="button"
+              >
+                Réinitialiser
+              </button>
+              <button className="button button-primary" onClick={() => setIsFilterOpen(false)} type="button">
+                Appliquer
+              </button>
+            </div>
+          </aside>
+        </>
+      ) : null}
+
+      {upgradeModal ? (
+        <div className="upgrade-overlay" onClick={() => setUpgradeModal(null)}>
+          <div className="upgrade-modal" onClick={(event) => event.stopPropagation()}>
+            <span className="upgrade-kicker">Plan Gratuit</span>
+            <strong className="upgrade-title">{upgradeModal.title}</strong>
+            <p className="upgrade-text">{upgradeModal.text}</p>
+            <div className="upgrade-actions">
+              <button className="button button-secondary" onClick={() => setUpgradeModal(null)} type="button">
+                Plus tard
+              </button>
+              <button
+                className="button button-primary"
+                onClick={() => {
+                  window.location.href = "/abonnement";
+                }}
+                type="button"
+              >
+                Passer à Pro
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {documentChoiceClient ? (
+        <div className={styles.choiceOverlay} onClick={() => setDocumentChoiceClient(null)}>
+          <div className={styles.choiceModal} onClick={(event) => event.stopPropagation()}>
+            <span className={styles.blockLabel}>Créer un document</span>
+            <strong className={styles.choiceTitle}>{documentChoiceClient.name}</strong>
+            <p className={styles.choiceText}>Choisis si tu veux créer un nouveau document Atelio Flow ou rattacher un fichier déjà existant.</p>
+            <div className={styles.choiceActions}>
+              <button className="button button-primary" onClick={() => startNewDocument(documentChoiceClient)} type="button">
+                Nouveau document
+              </button>
+              <button className="button button-secondary" onClick={() => startExternalUpload(documentChoiceClient)} type="button">
+                Déposer un fichier
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       <section className={styles.header}>
         <div>
           <div className={styles.tag}>Portefeuille</div>
-          <h1 className={styles.title}>
-            <span className={styles.gradient}>Clients</span>
-          </h1>
+          <div className={styles.titleRow}>
+            <h1 className={styles.title}>
+              <span className={styles.gradient}>Clients</span>
+            </h1>
+            <span className={styles.countBadge}>{clients.length}</span>
+          </div>
           <p className={styles.subtitle}>Centralise tes comptes, retrouve leur valeur et ouvre vite le bon document.</p>
         </div>
         <button className="button button-primary" onClick={() => setIsCreateOpen((current) => !current)} type="button">
           + Nouveau client
         </button>
       </section>
+
+      <input
+        className={styles.globalHiddenFileInput}
+        onChange={(event) => {
+          if (pendingUploadClient) {
+            handleExternalDocumentUpload(pendingUploadClient, event.target.files?.[0] ?? null);
+          }
+          event.currentTarget.value = "";
+        }}
+        ref={uploadInputRef}
+        type="file"
+      />
 
       {isCreateOpen ? (
         <section className={styles.createCard}>
@@ -468,6 +524,12 @@ export default function ClientsPage() {
               <strong className={styles.blockTitle}>Nouvelle fiche client</strong>
             </div>
           </div>
+
+          {pendingExternalDocument ? (
+            <div className={styles.pendingNote}>
+              Un fichier externe attend d’être rattaché à ce nouveau client : <strong>{pendingExternalDocument.fileName}</strong>
+            </div>
+          ) : null}
 
           <div className={styles.createGrid}>
             <label className={styles.createField}>
@@ -494,6 +556,25 @@ export default function ClientsPage() {
                 value={newClient.phone}
               />
             </label>
+            <label className={styles.createField}>
+              <span className={styles.detailLabel}>Type</span>
+              <div className={styles.kindToggle}>
+                <button
+                  className={`${styles.kindButton} ${newClient.kind === "pro" ? styles.kindButtonActive : ""}`}
+                  onClick={() => setNewClient((current) => ({ ...current, kind: "pro" }))}
+                  type="button"
+                >
+                  Professionnel
+                </button>
+                <button
+                  className={`${styles.kindButton} ${newClient.kind === "particulier" ? styles.kindButtonActive : ""}`}
+                  onClick={() => setNewClient((current) => ({ ...current, kind: "particulier" }))}
+                  type="button"
+                >
+                  Particulier
+                </button>
+              </div>
+            </label>
             <label className={`${styles.createField} ${styles.createFieldFull}`}>
               <span className={styles.detailLabel}>Coordonnées</span>
               <textarea
@@ -515,24 +596,6 @@ export default function ClientsPage() {
         </section>
       ) : null}
 
-      <section className={styles.summaryGrid}>
-        <article className={styles.summaryCard}>
-          <span className={styles.summaryLabel}>Clients suivis</span>
-          <strong className={styles.summaryValue}>{clients.length}</strong>
-          <span className={styles.summaryMeta}>dans le portefeuille</span>
-        </article>
-        <article className={styles.summaryCard}>
-          <span className={styles.summaryLabel}>Compte clé</span>
-          <strong className={styles.summaryValue}>{clients.filter((client) => client.docs >= 10).length}</strong>
-          <span className={styles.summaryMeta}>à entretenir en priorité</span>
-        </article>
-        <article className={styles.summaryCard}>
-          <span className={styles.summaryLabel}>Documents liés</span>
-          <strong className={styles.summaryValue}>{documents.length}</strong>
-          <span className={styles.summaryMeta}>dans cette base démo</span>
-        </article>
-      </section>
-
       <section className={styles.workspace}>
         <div className={styles.listCard}>
           <div className={styles.listTopbar}>
@@ -541,14 +604,58 @@ export default function ClientsPage() {
               <strong className={styles.blockTitle}>Comptes suivis</strong>
             </div>
 
-            <div className={styles.searchWrap}>
-              <span className={styles.searchIcon}>⌕</span>
-              <input
-                className={styles.search}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder="Rechercher un client..."
-                value={query}
-              />
+            <div className={styles.bulkBar}>
+              <label className={styles.bulkCheckbox}>
+                <input
+                  checked={allVisibleSelected}
+                  onChange={toggleSelectAllVisible}
+                  ref={(node) => {
+                    if (node) {
+                      node.indeterminate = someVisibleSelected && !allVisibleSelected;
+                    }
+                  }}
+                  type="checkbox"
+                />
+                <span>Sélectionner les résultats</span>
+              </label>
+
+              <div className={styles.bulkControls}>
+                <select
+                  className={styles.bulkSelect}
+                  onChange={(event) => setBulkAction(event.target.value as "" | "export" | "delete")}
+                  value={bulkAction}
+                >
+                  <option value="">Action sur la sélection</option>
+                  <option value="export">Exporter</option>
+                  <option value="delete">Supprimer</option>
+                </select>
+                <button
+                  className="button button-secondary"
+                  disabled={!selectedClients.length || !bulkAction}
+                  onClick={runBulkAction}
+                  type="button"
+                >
+                  Appliquer
+                </button>
+                {selectedClients.length ? <span className={styles.selectionCount}>{selectedClients.length} sélectionné(s)</span> : null}
+              </div>
+            </div>
+
+            <div className={styles.listTools}>
+              <button className={styles.filterTrigger} onClick={() => setIsFilterOpen(true)} type="button">
+                Filtrer les résultats
+                {activeFilterCount ? <span className={styles.filterCount}>{activeFilterCount}</span> : null}
+              </button>
+
+              <div className={styles.searchWrap}>
+                <span className={styles.searchIcon}>⌕</span>
+                <input
+                  className={styles.search}
+                  onChange={(event) => setQuery(event.target.value)}
+                  placeholder="Rechercher un client..."
+                  value={query}
+                />
+              </div>
             </div>
           </div>
 
@@ -564,6 +671,16 @@ export default function ClientsPage() {
                     onClick={() => setSelectedName((current) => (current === client.name ? null : client.name))}
                     type="button"
                   >
+                    <span
+                      className={styles.rowCheckboxCell}
+                      onClick={(event) => event.stopPropagation()}
+                    >
+                      <input
+                        checked={selectedClients.includes(client.name)}
+                        onChange={() => toggleClientSelection(client.name)}
+                        type="checkbox"
+                      />
+                    </span>
                     <span className={`${styles.avatar} ${styles[`bg${client.accent}`]}`}>{client.initials}</span>
 
                     <span className={styles.clientMeta}>
@@ -572,7 +689,7 @@ export default function ClientsPage() {
                     </span>
 
                     <span className={styles.clientAside}>
-                      <span className={`status-pill ${getTierClass(client.docs)}`}>{getClientTier(client.docs)}</span>
+                      <span className={`status-pill ${getTierClass(client.relationshipStatus)}`}>{client.relationshipStatus}</span>
                       <span className={styles.clientAmount}>{client.total}</span>
                     </span>
                   </button>
@@ -594,16 +711,16 @@ export default function ClientsPage() {
                             </div>
                           </div>
 
-                          <span className={`status-pill ${getTierClass(selectedClient.docs)}`}>
-                            {getClientTier(selectedClient.docs)}
+                          <span className={`status-pill ${getTierClass(selectedClient.relationshipStatus)}`}>
+                            {selectedClient.relationshipStatus}
                           </span>
                         </div>
 
-                        <div className={styles.detailGrid}>
-                          <div className={styles.detailItem}>
-                            <span className={styles.detailLabel}>Chiffre généré</span>
-                            <strong>{selectedClient.total}</strong>
-                          </div>
+                          <div className={styles.detailGrid}>
+                            <div className={styles.detailItem}>
+                              <span className={styles.detailLabel}>Chiffre généré</span>
+                              <strong>{selectedClient.total}</strong>
+                            </div>
                           <div className={styles.detailItem}>
                             <span className={styles.detailLabel}>Documents</span>
                             <strong>{selectedClient.docs}</strong>
@@ -624,10 +741,38 @@ export default function ClientsPage() {
                               value={selectedClient.phone}
                             />
                           </div>
-                          <div className={styles.detailItem}>
-                            <span className={styles.detailLabel}>Prochaine action</span>
-                            <strong>
-                              {clientDocuments.length ? "Reprendre le dernier document" : "Créer un premier document"}
+                            <div className={styles.detailItem}>
+                              <span className={styles.detailLabel}>Type de client</span>
+                              <strong>{selectedClient.kind === "pro" ? "Professionnel" : "Particulier"}</strong>
+                            </div>
+                            <label className={styles.detailItem}>
+                              <span className={styles.detailLabel}>Niveau de relation</span>
+                              <select
+                                className={styles.detailInput}
+                                onChange={(event) =>
+                                  updateClient(selectedClient.name, {
+                                    relationshipStatus: event.target.value as StoredClient["relationshipStatus"]
+                                  })
+                                }
+                                value={selectedClient.relationshipStatus}
+                              >
+                                <option value="À développer">À développer</option>
+                                <option value="Actif">Actif</option>
+                                <option value="Compte clé">Compte clé</option>
+                              </select>
+                            </label>
+                            <div className={styles.detailItem}>
+                              <span className={styles.detailLabel}>Créé le</span>
+                              <strong>{new Date(selectedClient.createdAt).toLocaleDateString("fr-FR")}</strong>
+                            </div>
+                            <div className={styles.detailItem}>
+                              <span className={styles.detailLabel}>Prochaine action</span>
+                              <strong>
+                                {clientDocuments.some((document) => document.status === "Brouillon")
+                                  ? "Finaliser le brouillon en cours"
+                                  : clientDocuments.length
+                                    ? "Reprendre le dernier document"
+                                    : "Créer un premier document"}
                             </strong>
                           </div>
                         </div>
@@ -642,29 +787,13 @@ export default function ClientsPage() {
                         </div>
 
                         <div className={styles.actionRow}>
-                          <a
+                          <button
                             className="button button-primary"
-                            href={`/editor?client=${encodeURIComponent(selectedClient.name)}`}
+                            onClick={() => openDocumentChoice(selectedClient)}
+                            type="button"
                           >
                             Créer un document
-                          </a>
-                          <a
-                            className="button button-secondary"
-                            href={`/documents?client=${encodeURIComponent(selectedClient.name)}`}
-                          >
-                            Voir ses documents
-                          </a>
-                          <label className={`${styles.uploadButton} button button-secondary`}>
-                            Déposer un document externe
-                            <input
-                              className={styles.hiddenInput}
-                              onChange={(event) => {
-                                handleExternalDocumentUpload(selectedClient, event.target.files?.[0] ?? null);
-                                event.currentTarget.value = "";
-                              }}
-                              type="file"
-                            />
-                          </label>
+                          </button>
                         </div>
 
                         <section className={styles.relatedSection}>
@@ -690,7 +819,7 @@ export default function ClientsPage() {
                                       </a>
                                       <button
                                         className="button button-secondary"
-                                        onClick={() => handleDownloadDocument(row, selectedClient)}
+                                        onClick={() => void downloadDocumentAsPdf(row, account)}
                                         type="button"
                                       >
                                         Retélécharger PDF

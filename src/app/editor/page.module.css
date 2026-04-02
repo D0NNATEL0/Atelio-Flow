@@ -3,6 +3,111 @@
   gap: 20px;
 }
 
+.stepperPanel {
+  padding: 18px 20px;
+  border-radius: var(--radius-lg);
+  background:
+    radial-gradient(circle at top right, rgba(242, 140, 40, 0.1), transparent 32%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(255, 251, 247, 0.88));
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-soft);
+}
+
+.stepperHeader {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.stepperLabel {
+  display: block;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.stepperTitle {
+  display: block;
+  margin-top: 4px;
+  font-size: 1rem;
+  font-weight: 800;
+}
+
+.stepperCurrent {
+  color: var(--muted);
+  font-size: 0.88rem;
+  text-align: right;
+}
+
+.stepTrack {
+  margin-top: 16px;
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(17, 17, 17, 0.06);
+  overflow: hidden;
+}
+
+.stepProgress {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #f8a44d 0%, var(--accent) 100%);
+}
+
+.stepList {
+  margin-top: 14px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.stepChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--muted);
+  font-weight: 700;
+  cursor: pointer;
+  transition:
+    border-color 160ms ease,
+    transform 160ms ease,
+    background-color 160ms ease;
+}
+
+.stepChip:hover {
+  transform: translateY(-1px);
+  border-color: rgba(242, 140, 40, 0.18);
+  background: rgba(255, 248, 242, 0.92);
+}
+
+.stepChipActive {
+  background: var(--accent-soft);
+  border-color: rgba(242, 140, 40, 0.2);
+  color: var(--accent-strong);
+}
+
+.stepChipDone {
+  color: var(--text);
+}
+
+.stepNumber {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: rgba(17, 17, 17, 0.06);
+  font-size: 0.72rem;
+}
+
 .header {
   display: flex;
   align-items: flex-start;
@@ -54,6 +159,7 @@
   border-radius: var(--radius-lg);
   background: var(--editor-page-background, #fff);
   color: var(--editor-text-color, #1f1b16);
+  border: 1px solid rgba(17, 17, 17, 0.05);
   box-shadow: var(--shadow-soft);
 }
 
@@ -71,14 +177,32 @@
   margin-bottom: 30px;
 }
 
+.brandBlock {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.companyLogo {
+  width: 64px;
+  height: 64px;
+  object-fit: contain;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.88);
+  border: 1px solid rgba(17, 17, 17, 0.06);
+  padding: 8px;
+}
+
 .companyName {
+  font-family: var(--brand-font);
   font-size: 1.6rem;
-  font-weight: 800;
+  font-weight: 500;
   color: var(--editor-accent-color, var(--accent-strong));
+  letter-spacing: -0.05em;
 }
 
 .muted {
-  color: #7b7269;
+  color: var(--editor-secondary-text-color, #7b7269);
   font-size: 0.84rem;
   line-height: 1.55;
   overflow-wrap: anywhere;
@@ -98,7 +222,7 @@
 
 .docNumber {
   margin-top: 6px;
-  color: #7b7269;
+  color: var(--editor-secondary-text-color, #7b7269);
   font-size: 0.84rem;
   text-align: right;
 }
@@ -121,7 +245,7 @@
 }
 
 .metaLabel {
-  color: #8b8279;
+  color: var(--editor-secondary-text-color, #8b8279);
   font-size: 0.68rem;
   font-weight: 700;
   text-transform: uppercase;
@@ -144,7 +268,7 @@
 }
 
 .partyLabel {
-  color: #8b8279;
+  color: var(--editor-secondary-text-color, #8b8279);
   font-size: 0.68rem;
   font-weight: 700;
   text-transform: uppercase;
@@ -160,7 +284,7 @@
 
 .partyDetail {
   margin-top: 4px;
-  color: #6f675f;
+  color: var(--editor-secondary-text-color, #6f675f);
   font-size: 0.84rem;
   line-height: 1.6;
   overflow-wrap: anywhere;
@@ -186,7 +310,7 @@
 
 .contractText {
   margin-top: 8px;
-  color: #4f483f;
+  color: var(--editor-secondary-text-color, #4f483f);
   font-size: 0.92rem;
   line-height: 1.75;
   overflow-wrap: anywhere;
@@ -217,7 +341,7 @@
 .signatureMeta {
   display: block;
   margin-top: 8px;
-  color: #7b7269;
+  color: var(--editor-secondary-text-color, #7b7269);
   font-size: 0.82rem;
 }
 
@@ -253,7 +377,7 @@
 
 .totalRow {
   padding: 8px 0;
-  color: #625b53;
+  color: var(--editor-secondary-text-color, #625b53);
   font-size: 0.86rem;
   border-bottom: 1px solid rgba(17, 17, 17, 0.06);
 }
@@ -270,7 +394,9 @@
 .panel {
   padding: 16px;
   border-radius: var(--radius-lg);
-  background: var(--surface);
+  background:
+    radial-gradient(circle at top right, rgba(242, 140, 40, 0.06), transparent 36%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(255, 251, 247, 0.88));
   border: 1px solid var(--line);
   box-shadow: var(--shadow-soft);
 }
@@ -289,6 +415,32 @@
   color: var(--muted);
   font-size: 0.84rem;
   line-height: 1.5;
+}
+
+.accountHint {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(17, 17, 17, 0.06);
+}
+
+.accountHint a {
+  color: var(--accent-strong);
+  font-weight: 700;
+}
+
+.accountLogoPreview {
+  width: 54px;
+  height: 54px;
+  object-fit: contain;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(17, 17, 17, 0.06);
+  padding: 6px;
 }
 
 .typeRow,
@@ -314,12 +466,39 @@
   font-weight: 700;
   cursor: pointer;
   white-space: nowrap;
+  transition:
+    border-color 160ms ease,
+    transform 160ms ease,
+    background-color 160ms ease;
+}
+
+.typeButton:hover {
+  transform: translateY(-1px);
+  border-color: rgba(242, 140, 40, 0.18);
+  background: rgba(255, 248, 242, 0.92);
 }
 
 .typeActive {
   background: var(--accent-soft);
   border-color: rgba(242, 140, 40, 0.2);
   color: var(--accent-strong);
+}
+
+.typeLocked {
+  opacity: 0.72;
+  background: rgba(17, 17, 17, 0.04);
+}
+
+.lockBadge {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(17, 17, 17, 0.08);
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 700;
 }
 
 .formRow {
@@ -350,6 +529,16 @@
   border: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.76);
   outline: none;
+  transition:
+    border-color 160ms ease,
+    box-shadow 160ms ease,
+    background-color 160ms ease;
+}
+
+.input:focus {
+  border-color: rgba(242, 140, 40, 0.28);
+  box-shadow: 0 0 0 4px rgba(242, 140, 40, 0.08);
+  background: rgba(255, 255, 255, 0.94);
 }
 
 .textarea {
@@ -379,8 +568,9 @@
 .lineCard {
   padding: 14px;
   border-radius: 14px;
-  background: rgba(255, 255, 255, 0.72);
+  background: rgba(255, 255, 255, 0.82);
   border: 1px solid rgba(17, 17, 17, 0.06);
+  box-shadow: 0 10px 24px rgba(32, 24, 17, 0.04);
 }
 
 .lineHeader {
@@ -408,6 +598,55 @@
   color: var(--editor-accent-color, var(--accent-strong));
 }
 
+.calcSection {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.82);
+  border: 1px solid rgba(17, 17, 17, 0.06);
+}
+
+.calcSimpleGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.calcSummary {
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+  border-radius: 14px;
+  background:
+    linear-gradient(180deg, rgba(17, 17, 17, 0.02), rgba(255, 255, 255, 0.86));
+  border: 1px solid rgba(17, 17, 17, 0.06);
+}
+
+.calcSummaryHead,
+.calcSummaryRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.calcSummaryHead strong {
+  font-size: 0.95rem;
+  font-weight: 800;
+}
+
+.calcSummaryHead span,
+.calcSummaryRow span {
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.calcSummaryRow:last-child span:last-child {
+  color: var(--text);
+  font-weight: 800;
+}
+
 .colorInput {
   min-height: 48px;
   padding: 6px;
@@ -418,7 +657,7 @@
   margin-top: 28px;
   padding-top: 16px;
   border-top: 1px solid rgba(17, 17, 17, 0.06);
-  color: #7b7269;
+  color: var(--editor-secondary-text-color, #7b7269);
   font-size: 0.84rem;
   line-height: 1.55;
   overflow-wrap: anywhere;
@@ -426,6 +665,44 @@
 
 .actions {
   flex-direction: column;
+}
+
+.wizardPanel {
+  display: grid;
+  gap: 18px;
+}
+
+.wizardHeader {
+  display: grid;
+  gap: 6px;
+}
+
+.wizardTitle {
+  font-size: 1.15rem;
+  font-weight: 800;
+}
+
+.stepBody {
+  display: grid;
+  gap: 12px;
+}
+
+.finalizeStack {
+  display: grid;
+  gap: 20px;
+}
+
+.finalReview {
+  display: grid;
+  gap: 12px;
+}
+
+.wizardActions {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(17, 17, 17, 0.06);
 }
 
 .quickLinks {
@@ -442,39 +719,7 @@
 
   .leftColumn,
   .rightColumn {
-    display: contents;
-  }
-
-  .typePanel {
-    order: 1;
-  }
-
-  .infoPanel {
-    order: 2;
-  }
-
-  .identityPanel {
-    order: 3;
-  }
-
-  .prestationsPanel {
-    order: 4;
-  }
-
-  .calculationsPanel {
-    order: 5;
-  }
-
-  .customizationPanel {
-    order: 6;
-  }
-
-  .actionsPanel {
-    order: 7;
-  }
-
-  .previewPanel {
-    order: 8;
+    display: grid;
   }
 }
 
@@ -483,16 +728,28 @@
     padding: 24px;
   }
 
+  .brandBlock,
+  .accountHint,
   .docMeta,
   .docParties,
   .formRow,
-  .typeRow {
+  .typeRow,
+  .calcSimpleGrid {
     display: grid;
     grid-template-columns: 1fr;
   }
 
   .contractSignatures {
     grid-template-columns: 1fr;
+  }
+
+  .stepperHeader,
+  .wizardActions {
+    display: grid;
+  }
+
+  .stepperCurrent {
+    text-align: left;
   }
 
   .quickLinks {
