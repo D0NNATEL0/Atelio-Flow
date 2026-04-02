@@ -1,4 +1,6 @@
 import { clientRows, documentRows } from "@/data";
+import { isSupabaseConfigured } from "@/lib/env";
+import { getLegacyFallbackStorageKey, getScopedStorageKey, hasAuthenticatedUserScope } from "@/lib/user-scope";
 
 export type StoredClient = {
   name: string;
@@ -142,6 +144,10 @@ function normalizeClient(client: StoredClient, index: number): StoredClient {
 }
 
 export function defaultClients(): StoredClient[] {
+  if (hasAuthenticatedUserScope() || isSupabaseConfigured) {
+    return [];
+  }
+
   return clientRows.map((client, index) =>
     normalizeClient(
       {
@@ -160,6 +166,10 @@ export function defaultClients(): StoredClient[] {
 }
 
 export function defaultDocuments(): StoredDocument[] {
+  if (hasAuthenticatedUserScope() || isSupabaseConfigured) {
+    return [];
+  }
+
   return documentRows.map((row) => ({ ...row }));
 }
 
@@ -179,7 +189,9 @@ export function hydrateClients(clients: StoredClient[], documents: StoredDocumen
 export function loadClients(): StoredClient[] {
   if (!canUseStorage()) return defaultClients();
 
-  const raw = window.localStorage.getItem(CLIENTS_KEY);
+  const scopedRaw = window.localStorage.getItem(getScopedStorageKey(CLIENTS_KEY));
+  const legacyKey = getLegacyFallbackStorageKey(CLIENTS_KEY);
+  const raw = scopedRaw ?? (legacyKey ? window.localStorage.getItem(legacyKey) : null);
   if (!raw) return defaultClients();
 
   try {
@@ -191,13 +203,15 @@ export function loadClients(): StoredClient[] {
 
 export function saveClients(clients: StoredClient[]) {
   if (!canUseStorage()) return;
-  window.localStorage.setItem(CLIENTS_KEY, JSON.stringify(clients));
+  window.localStorage.setItem(getScopedStorageKey(CLIENTS_KEY), JSON.stringify(clients));
 }
 
 export function loadDocuments(): StoredDocument[] {
   if (!canUseStorage()) return defaultDocuments();
 
-  const raw = window.localStorage.getItem(DOCUMENTS_KEY);
+  const scopedRaw = window.localStorage.getItem(getScopedStorageKey(DOCUMENTS_KEY));
+  const legacyKey = getLegacyFallbackStorageKey(DOCUMENTS_KEY);
+  const raw = scopedRaw ?? (legacyKey ? window.localStorage.getItem(legacyKey) : null);
   if (!raw) return defaultDocuments();
 
   try {
@@ -209,13 +223,15 @@ export function loadDocuments(): StoredDocument[] {
 
 export function saveDocuments(documents: StoredDocument[]) {
   if (!canUseStorage()) return;
-  window.localStorage.setItem(DOCUMENTS_KEY, JSON.stringify(documents));
+  window.localStorage.setItem(getScopedStorageKey(DOCUMENTS_KEY), JSON.stringify(documents));
 }
 
 export function loadPendingExternalDocument(): PendingExternalDocument | null {
   if (!canUseStorage()) return null;
 
-  const raw = window.localStorage.getItem(PENDING_EXTERNAL_DOCUMENT_KEY);
+  const scopedRaw = window.localStorage.getItem(getScopedStorageKey(PENDING_EXTERNAL_DOCUMENT_KEY));
+  const legacyKey = getLegacyFallbackStorageKey(PENDING_EXTERNAL_DOCUMENT_KEY);
+  const raw = scopedRaw ?? (legacyKey ? window.localStorage.getItem(legacyKey) : null);
   if (!raw) return null;
 
   try {
@@ -227,12 +243,12 @@ export function loadPendingExternalDocument(): PendingExternalDocument | null {
 
 export function savePendingExternalDocument(document: PendingExternalDocument) {
   if (!canUseStorage()) return;
-  window.localStorage.setItem(PENDING_EXTERNAL_DOCUMENT_KEY, JSON.stringify(document));
+  window.localStorage.setItem(getScopedStorageKey(PENDING_EXTERNAL_DOCUMENT_KEY), JSON.stringify(document));
 }
 
 export function clearPendingExternalDocument() {
   if (!canUseStorage()) return;
-  window.localStorage.removeItem(PENDING_EXTERNAL_DOCUMENT_KEY);
+  window.localStorage.removeItem(getScopedStorageKey(PENDING_EXTERNAL_DOCUMENT_KEY));
 }
 
 export function upsertClientFromDocument(

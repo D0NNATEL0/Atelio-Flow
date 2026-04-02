@@ -1,12 +1,16 @@
 "use client";
 
 import { ChangeEvent, useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { defaultAccount, loadAccount, saveAccount, type StoredAccount } from "@/lib/account-store";
 import { isSupabaseConfigured } from "@/lib/env";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
+import { clearCurrentUserScope } from "@/lib/user-scope";
+import { clearPendingExternalDocument, saveClients, saveDocuments } from "@/lib/workspace-store";
 import styles from "./page.module.css";
 
 export default function AccountPage() {
+  const router = useRouter();
   const [account, setAccount] = useState<StoredAccount>(defaultAccount());
   const [savedAccount, setSavedAccount] = useState<StoredAccount>(defaultAccount());
   const [message, setMessage] = useState("");
@@ -167,14 +171,28 @@ export default function AccountPage() {
     }
   }
 
-  function handleDeleteAccount() {
+  async function handleDeleteAccount() {
     const nextAccount = defaultAccount();
     setAccount(nextAccount);
     setSavedAccount(nextAccount);
     setSecurityMessage("");
-    setMessage("Le compte a été réinitialisé pour cette démo locale.");
+    setMessage("Le compte local a été vidé.");
     setDeleteModalOpen(false);
+    saveClients([]);
+    saveDocuments([]);
+    clearPendingExternalDocument();
     saveAccount(nextAccount);
+
+    if (isSupabaseConfigured) {
+      try {
+        const supabase = getSupabaseBrowserClient();
+        await supabase.auth.signOut();
+      } catch {}
+    }
+
+    clearCurrentUserScope();
+    router.push("/auth/login");
+    router.refresh();
   }
 
   return (

@@ -1,3 +1,6 @@
+import { isSupabaseConfigured } from "@/lib/env";
+import { getLegacyFallbackStorageKey, getScopedStorageKey, loadCurrentUserScope } from "@/lib/user-scope";
+
 export type StoredAccount = {
   plan: "free" | "pro";
   fullName: string;
@@ -23,6 +26,52 @@ export const FREE_CLIENT_LIMIT = 5;
 export const FREE_DOCUMENT_LIMIT = 10;
 
 export function defaultAccount(): StoredAccount {
+  const scope = loadCurrentUserScope();
+
+  if (scope) {
+    return {
+      plan: "free",
+      fullName: scope.fullName || "",
+      professionalEmail: scope.email || "",
+      phone: "",
+      companyName: "",
+      legalName: "",
+      companyAddress: "",
+      companyMeta: "",
+      siretNumber: "",
+      vatNumber: "",
+      website: "",
+      iban: "",
+      defaultPaymentTerms: "30 jours net",
+      footerNote: "Merci pour votre confiance.",
+      logoUrl: "",
+      logoName: "",
+      passwordUpdatedAt: ""
+    };
+  }
+
+  if (isSupabaseConfigured) {
+    return {
+      plan: "free",
+      fullName: "",
+      professionalEmail: "",
+      phone: "",
+      companyName: "",
+      legalName: "",
+      companyAddress: "",
+      companyMeta: "",
+      siretNumber: "",
+      vatNumber: "",
+      website: "",
+      iban: "",
+      defaultPaymentTerms: "30 jours net",
+      footerNote: "Merci pour votre confiance.",
+      logoUrl: "",
+      logoName: "",
+      passwordUpdatedAt: ""
+    };
+  }
+
   return {
     plan: "free",
     fullName: "Mathis",
@@ -67,7 +116,9 @@ function canUseStorage() {
 export function loadAccount(): StoredAccount {
   if (!canUseStorage()) return defaultAccount();
 
-  const raw = window.localStorage.getItem(ACCOUNT_KEY);
+  const scopedRaw = window.localStorage.getItem(getScopedStorageKey(ACCOUNT_KEY));
+  const legacyKey = getLegacyFallbackStorageKey(ACCOUNT_KEY);
+  const raw = scopedRaw ?? (legacyKey ? window.localStorage.getItem(legacyKey) : null);
   if (!raw) return defaultAccount();
 
   try {
@@ -90,6 +141,6 @@ export function loadAccount(): StoredAccount {
 
 export function saveAccount(account: StoredAccount) {
   if (!canUseStorage()) return;
-  window.localStorage.setItem(ACCOUNT_KEY, JSON.stringify(account));
+  window.localStorage.setItem(getScopedStorageKey(ACCOUNT_KEY), JSON.stringify(account));
   window.dispatchEvent(new CustomEvent("atelio-account-updated"));
 }

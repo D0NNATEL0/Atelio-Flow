@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { FormEvent, useState } from "react";
 import { isSupabaseConfigured } from "@/lib/env";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
+import { saveCurrentUserScope } from "@/lib/user-scope";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -30,7 +31,7 @@ export default function LoginPage() {
 
     try {
       const supabase = getSupabaseBrowserClient();
-      const { error } = await supabase.auth.signInWithPassword({
+      const { data, error } = await supabase.auth.signInWithPassword({
         email,
         password
       });
@@ -38,6 +39,14 @@ export default function LoginPage() {
       if (error) {
         setFeedback({ type: "error", text: error.message });
         return;
+      }
+
+      if (data.user) {
+        saveCurrentUserScope({
+          id: data.user.id,
+          email: data.user.email ?? email,
+          fullName: (data.user.user_metadata?.full_name as string | undefined) ?? ""
+        });
       }
 
       setFeedback({ type: "success", text: "Connexion réussie. Redirection en cours..." });

@@ -1,5 +1,6 @@
 import "./globals.css";
 import type { Metadata } from "next";
+import { AuthStorageSync } from "@/components/AuthStorageSync";
 
 export const metadata: Metadata = {
   title: "Atelio Flow",
@@ -13,7 +14,10 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="fr">
-      <body>{children}</body>
+      <body>
+        <AuthStorageSync />
+        {children}
+      </body>
     </html>
   );
 }

@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { FormEvent, useState } from "react";
 import { isSupabaseConfigured } from "@/lib/env";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
+import { saveCurrentUserScope } from "@/lib/user-scope";
 
 export default function SignupPage() {
   const router = useRouter();
@@ -67,6 +68,14 @@ export default function SignupPage() {
           text: "Cette adresse mail est déjà reliée à un compte."
         });
         return;
+      }
+
+      if (data.user) {
+        saveCurrentUserScope({
+          id: data.user.id,
+          email: data.user.email ?? email,
+          fullName: (data.user.user_metadata?.full_name as string | undefined) ?? fullName
+        });
       }
 
       setFeedback({

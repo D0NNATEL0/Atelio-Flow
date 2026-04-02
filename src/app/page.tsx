@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { loadAccount } from "@/lib/account-store";
 import { monthlyStats, recentActivity, topClients } from "@/data";
 import styles from "./page.module.css";
 
@@ -12,6 +13,7 @@ function getStatusClass(status: string) {
 }
 
 export default function DashboardPage() {
+  const [firstName, setFirstName] = useState("");
   const [period, setPeriod] = useState<"mois" | "annee">("mois");
   const [selectedMonth, setSelectedMonth] = useState("04");
   const [selectedYear, setSelectedYear] = useState("2026");
@@ -142,13 +144,18 @@ export default function DashboardPage() {
   const maxValue = Math.max(...chartData.map((item) => item.value));
   const selectedMonthLabel = monthOptions.find((month) => month.value === selectedMonth)?.label ?? "Avr";
 
+  useEffect(() => {
+    const account = loadAccount();
+    setFirstName((account.fullName || "").split(" ").filter(Boolean)[0] || "toi");
+  }, []);
+
   return (
     <div className={styles.page}>
       <section className={styles.header}>
         <div>
           <div className={styles.tag}>Vue générale</div>
           <h1 className={styles.title}>
-            Bonjour, <span className={styles.gradient}>Mathis</span>
+            Bonjour, <span className={styles.gradient}>{firstName}</span>
           </h1>
         </div>
         <button className="button button-secondary button-small" type="button">
